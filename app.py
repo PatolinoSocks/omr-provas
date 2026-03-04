@@ -12,7 +12,7 @@ from omr_engine import corrigir_prova, OMRConfig
 
 st.set_page_config(page_title="OMR - Correção em Lote", layout="centered")
 st.title("📄 OMR - Raphael Alvim")
-st.title("Aplicativo para Correção de Babarito de Provas em Lote")
+st.title("Aplicativo para Correção de Gabarito Específico de Provas em Lote")
 st.caption("Envie várias fotos e baixe um Excel/CSV consolidado.")
 
 ALT_OK = {"A", "B", "C", "D"}
