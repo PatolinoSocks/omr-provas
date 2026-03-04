@@ -156,10 +156,10 @@ for i, up in enumerate(uploads, start=1):
             "erros": ",".join(map(str, r.get("erros", []))) if r.get("erros") else "",
         }
         row.update(answers_to_wide_row(r.get("respostas", [])))
-        
+
         # garante ordem Q01..Q22
         for i in range(1, n_questions + 1):
-        row.setdefault(f"Q{i:02d}", "")
+            row.setdefault(f"Q{i:02d}", "")
 
         if debug:
             row["thr"] = r.get("thr", None)
