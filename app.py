@@ -18,11 +18,20 @@ ALT_OK = {"A", "B", "C", "D"}
 
 
 def parse_turma_nome_from_filename(filename: str):
-    base = os.path.splitext(os.path.basename(filename))[0]
+    # remove caminho e extensão
+    base = os.path.splitext(os.path.basename(filename))[0].strip()
+
+    # remove espaços extras
+    base = base.replace(" ", "")
+
     if "_" in base:
         turma, nome = base.split("_", 1)
+        turma = turma.strip()
+        nome = nome.strip()
         return turma, nome
-    return "", base
+
+    # fallback caso não tenha _
+    return "SEM_TURMA", base
 
 
 def parse_gabarito_text(text: str, n_questions: int = 22):
@@ -133,8 +142,8 @@ for i, up in enumerate(uploads, start=1):
         r = corrigir_prova(tmp_path, gabarito, cfg=cfg)
 
         # força turma/nome pelo arquivo (para lote faz sentido)
-        r["turma"] = r.get("turma") or turma_sug
-        r["nome"] = r.get("nome") or nome_sug
+        r["turma"] = turma_sug
+        r["nome"] = nome_sug
 
         row = {
             "turma": r.get("turma", ""),
@@ -147,6 +156,10 @@ for i, up in enumerate(uploads, start=1):
             "erros": ",".join(map(str, r.get("erros", []))) if r.get("erros") else "",
         }
         row.update(answers_to_wide_row(r.get("respostas", [])))
+        
+        # garante ordem Q01..Q22
+        for i in range(1, n_questions + 1):
+        row.setdefault(f"Q{i:02d}", "")
 
         if debug:
             row["thr"] = r.get("thr", None)
