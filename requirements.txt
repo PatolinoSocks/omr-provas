@@ -1,0 +1,6 @@
+streamlit==1.41.1
+opencv-python-headless==4.10.0.84
+numpy
+scikit-learn
+pandas
+openpyxl
