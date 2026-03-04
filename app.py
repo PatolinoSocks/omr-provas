@@ -141,7 +141,6 @@ for i, up in enumerate(uploads, start=1):
     try:
         r = corrigir_prova(tmp_path, gabarito, cfg=cfg)
 
-        # força turma/nome pelo arquivo (para lote faz sentido)
         r["turma"] = turma_sug
         r["nome"] = nome_sug
 
@@ -152,19 +151,10 @@ for i, up in enumerate(uploads, start=1):
             "nota": r.get("nota", None),
             "percentual": r.get("percentual", None),
             "acertos": r.get("acertos", None),
-            # removendo thr/brancos do “principal”, mas mantendo erros (útil)
             "erros": ",".join(map(str, r.get("erros", []))) if r.get("erros") else "",
         }
+
         row.update(answers_to_wide_row(r.get("respostas", [])))
-
-        # garante ordem Q01..Q22
-        for i in range(1, n_questions + 1):
-            row.setdefault(f"Q{i:02d}", "")
-
-        if debug:
-            row["thr"] = r.get("thr", None)
-            row["brancos"] = ",".join(map(str, r.get("brancos", []))) if r.get("brancos") else ""
-
         resultados.append(row)
 
     except Exception as e:
@@ -176,6 +166,7 @@ for i, up in enumerate(uploads, start=1):
         except Exception:
             pass
 
+    # barra de progresso corrigida
     progress.progress(int((i / len(uploads)) * 100))
 
 status.success("✅ Lote finalizado!")
