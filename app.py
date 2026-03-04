@@ -176,7 +176,7 @@ for i, up in enumerate(uploads, start=1):
         except Exception:
             pass
 
-    progress.progress(i / len(uploads))
+    progress.progress(int((i / len(uploads)) * 100))
 
 status.success("✅ Lote finalizado!")
 
