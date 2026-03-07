@@ -84,7 +84,7 @@ n_questions = getattr(cfg, "n_questions_used", 22)
 st.sidebar.subheader("Gabarito (1–22)")
 gabarito_text = st.sidebar.text_area(
     "Cole o gabarito (22 letras ou linhas 1:A etc.)",
-    value="ABCDABCDABCDABCDABCDABCDABCDABCDABCDABCD"
+    value="ABCDABCDABCDABCDABCDABCDABCDABCDABCDABCD",
     height=120,
 )
 gabarito = parse_gabarito_text(gabarito_text, n_questions=n_questions)
