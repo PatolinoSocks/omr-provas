@@ -81,9 +81,9 @@ st.sidebar.header("⚙️ Configuração")
 cfg = OMRConfig()
 n_questions = getattr(cfg, "n_questions_used", 22)
 
-st.sidebar.subheader("Gabarito (1–22)")
+st.sidebar.subheader("Gabarito (1–40)")
 gabarito_text = st.sidebar.text_area(
-    "Cole o gabarito (22 letras ou linhas 1:A etc.)",
+    "Cole o gabarito (40 letras ou linhas 1:A etc.)",
     value="ABCDABCDABCDABCDABCDABCDABCDABCDABCDABCD",
     height=120,
 )
