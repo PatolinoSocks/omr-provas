@@ -64,9 +64,9 @@ class OMRConfig:
 
     # --- layout ---
     n_cols: int = 4
-    n_rows_per_col: int = 7
+    n_rows_per_col: int = 10
     n_alts: int = 4
-    n_questions_used: int = 22
+    n_questions_used: int = 40
 
     # --- KMeans ---
     kmeans_n_init: int = 10

@@ -69,12 +69,9 @@ def parse_gabarito_text(text: str, n_questions: int = 22):
     return g
 
 
-def answers_to_wide_row(answers):
-    row = {}
-    for q, a in answers:
-        row[f"Q{q:02d}"] = a if a is not None else ""
-    return row
-
+def answers_to_wide_row(answers, n_questions: int):
+    m = {q: a for q, a in answers}
+    return {f"Q{i:02d}": (m.get(i) if m.get(i) is not None else "") for i in range(1, n_questions + 1)}
 
 # ---------------------------
 # Sidebar
@@ -87,7 +84,7 @@ n_questions = getattr(cfg, "n_questions_used", 22)
 st.sidebar.subheader("Gabarito (1–22)")
 gabarito_text = st.sidebar.text_area(
     "Cole o gabarito (22 letras ou linhas 1:A etc.)",
-    value="ABCDABCDABCDABCDABCDAB",
+    value="ABCDABCDABCDABCDABCDABCDABCDABCDABCDABCD"
     height=120,
 )
 gabarito = parse_gabarito_text(gabarito_text, n_questions=n_questions)
@@ -155,7 +152,7 @@ for i, up in enumerate(uploads, start=1):
             "erros": ",".join(map(str, r.get("erros", []))) if r.get("erros") else "",
         }
 
-        row.update(answers_to_wide_row(r.get("respostas", [])))
+        row.update(answers_to_wide_row(r.get("respostas", []), n_questions))
         resultados.append(row)
 
     except Exception as e:
