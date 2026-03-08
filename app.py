@@ -16,13 +16,11 @@ st.title("Correção de Gabarito de Provas")
 st.caption("Envie várias fotos e baixe um Excel/CSV consolidado.")
 
 ALT_OK = {"A", "B", "C", "D"}
+MAX_QUESTIONS = 40  # formulário físico suporta até 40
 
 
 def parse_turma_nome_from_filename(filename: str):
-    # remove caminho e extensão
     base = os.path.splitext(os.path.basename(filename))[0].strip()
-
-    # remove espaços extras
     base = base.replace(" ", "")
 
     if "_" in base:
@@ -31,20 +29,19 @@ def parse_turma_nome_from_filename(filename: str):
         nome = nome.strip()
         return turma, nome
 
-    # fallback caso não tenha _
     return "SEM_TURMA", base
 
 
-def parse_gabarito_text(text: str, n_questions: int = 22):
+def parse_gabarito_text(text: str, n_questions: int = 40):
     text = (text or "").strip().upper()
     if not text:
         return {}
 
-    # caso 1: "ABCD..." (contínuo)
+    # caso 1: "ABCD..." contínuo
     compact = re.sub(r"[^ABCD]", "", text)
-    if len(compact) >= n_questions:
+    if len(compact) >= 1:
         compact = compact[:n_questions]
-        return {i + 1: compact[i] for i in range(n_questions)}
+        return {i + 1: compact[i] for i in range(len(compact))}
 
     # caso 2: linhas "1:A"
     g = {}
@@ -63,15 +60,19 @@ def parse_gabarito_text(text: str, n_questions: int = 22):
     if not g:
         tokens = re.split(r"[\s,;]+", text)
         tokens = [t for t in tokens if t]
-        if len(tokens) >= n_questions and all(t in ALT_OK for t in tokens[:n_questions]):
-            return {i + 1: tokens[i] for i in range(n_questions)}
+        if len(tokens) >= 1 and all(t in ALT_OK for t in tokens[: min(len(tokens), n_questions)]):
+            return {i + 1: tokens[i] for i in range(min(len(tokens), n_questions))}
 
     return g
 
 
 def answers_to_wide_row(answers, n_questions: int):
     m = {q: a for q, a in answers}
-    return {f"Q{i:02d}": (m.get(i) if m.get(i) is not None else "") for i in range(1, n_questions + 1)}
+    return {
+        f"Q{i:02d}": (m.get(i) if m.get(i) is not None else "")
+        for i in range(1, n_questions + 1)
+    }
+
 
 # ---------------------------
 # Sidebar
@@ -79,34 +80,33 @@ def answers_to_wide_row(answers, n_questions: int):
 st.sidebar.header("⚙️ Configuração")
 
 cfg = OMRConfig()
-n_questions = getattr(cfg, "n_questions_used", 22)
 
-st.sidebar.subheader("Gabarito (1–40)")
+st.sidebar.subheader("Gabarito (até 40 questões)")
 gabarito_text = st.sidebar.text_area(
-    "Cole o gabarito (40 letras ou linhas 1:A etc.)",
+    "Cole o gabarito (até 40 letras ou linhas 1:A etc.)",
     value="",
     height=120,
 )
-gabarito = parse_gabarito_text(gabarito_text, n_questions=n_questions)
 
-if len(gabarito) > 0:
-    cfg.n_questions_used = len(gabarito)
-
-if len(gabarito) > 0:
-    st.sidebar.info(
-        f"""
-Formulário suporta até: **40 questões**
-
-Questões da prova: **{len(gabarito)}**
-"""
-    )
+gabarito = parse_gabarito_text(gabarito_text, n_questions=MAX_QUESTIONS)
 
 if len(gabarito) == 0:
     st.sidebar.warning("Cole o gabarito da prova.")
+    n_questions_used = MAX_QUESTIONS
 else:
-    st.sidebar.success(f"Gabarito carregado: {len(gabarito)} questões.")
+    n_questions_used = len(gabarito)
+    st.sidebar.success(f"Gabarito carregado: {n_questions_used} questões.")
+    st.sidebar.info(
+        f"""
+Formulário suporta até: **{MAX_QUESTIONS} questões**
 
-cfg.n_questions_used = len(gabarito)
+Questões da prova: **{n_questions_used}**
+"""
+    )
+
+# engine sempre usa layout físico de 40
+cfg.n_rows_per_col = 10
+cfg.n_questions_used = n_questions_used
 
 debug = st.sidebar.checkbox("Mostrar detalhes por aluno (thr, erros/brancos)", value=False)
 
@@ -130,6 +130,10 @@ if not uploads:
 st.subheader("2) Rodar correção em lote")
 run = st.button("✅ Corrigir todas", type="primary")
 if not run:
+    st.stop()
+
+if len(gabarito) == 0:
+    st.warning("Cole o gabarito antes de processar as imagens.")
     st.stop()
 
 
@@ -164,7 +168,7 @@ for i, up in enumerate(uploads, start=1):
 
         row = {
             "turma": r.get("turma", ""),
-             "nome": r.get("nome", ""),
+            "nome": r.get("nome", ""),
             "imagem": up.name,
             "nota": r.get("nota", None),
             "percentual": r.get("percentual", None),
@@ -173,7 +177,12 @@ for i, up in enumerate(uploads, start=1):
             "erros": ",".join(map(str, r.get("erros", []))) if r.get("erros") else "",
         }
 
-        row.update(answers_to_wide_row(r.get("respostas", []), n_questions))
+        row.update(answers_to_wide_row(r.get("respostas", []), n_questions_used))
+
+        if debug:
+            row["thr"] = r.get("thr", None)
+            row["brancos"] = ",".join(map(str, r.get("brancos", []))) if r.get("brancos") else ""
+
         resultados.append(row)
 
     except Exception as e:
@@ -185,7 +194,6 @@ for i, up in enumerate(uploads, start=1):
         except Exception:
             pass
 
-    # barra de progresso corrigida
     progress.progress(int((i / len(uploads)) * 100))
 
 status.success("✅ Lote finalizado!")
@@ -194,11 +202,12 @@ st.success(
     f"""
 📊 Resumo da correção
 
-Formulário: **40 posições**
+Formulário: **{MAX_QUESTIONS} posições**
 
-Questões corrigidas: **{len(gabarito)}**
+Questões corrigidas: **{n_questions_used}**
 """
 )
+
 
 # ---------------------------
 # Tabelas de saída
@@ -207,8 +216,7 @@ st.subheader("3) Resultado consolidado")
 
 df = pd.DataFrame(resultados) if resultados else pd.DataFrame()
 if not df.empty:
-    # ordena por turma/nome
-    cols_first = ["turma", "nome", "imagem", "nota", "percentual", "acertos", "erros"]
+    cols_first = ["turma", "nome", "imagem", "nota", "percentual", "acertos", "respondidas", "erros"]
     other_cols = [c for c in df.columns if c not in cols_first]
     df = df[cols_first + other_cols]
     df = df.sort_values(["turma", "nome", "imagem"], na_position="last")
@@ -230,7 +238,6 @@ st.subheader("4) Baixar Excel/CSV consolidado")
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 base_name = f"resultados_lote_{timestamp}"
 
-# CSV
 csv_bytes = df.to_csv(index=False).encode("utf-8") if not df.empty else b""
 st.download_button(
     "⬇️ Baixar CSV",
@@ -240,7 +247,6 @@ st.download_button(
     disabled=df.empty,
 )
 
-# Excel com 2 abas: resultados + erros
 excel_buffer = io.BytesIO()
 if not df.empty:
     with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
