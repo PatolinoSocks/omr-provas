@@ -441,7 +441,6 @@ def grade_answers(answers: AnswersList, gabarito: Dict[int, str]) -> Dict[str, o
         "percentual": percentual,
     }
 
-
 def corrigir_prova(
     image_path: str,
     gabarito: Dict[int, str],
@@ -481,9 +480,10 @@ def corrigir_prova(
 
     # answers
     answers = extract_answers_kmeans(bubble_info, thr, cfg)
+
     if gabarito:
-    max_q = max(gabarito.keys())
-    answers = [a for a in answers if a[0] <= max_q]
+        max_q = max(gabarito.keys())
+        answers = [a for a in answers if a[0] <= max_q]
 
     # grade
     result_grade = grade_answers(answers, gabarito)
@@ -501,21 +501,17 @@ def corrigir_prova(
     if debug_dir:
         os.makedirs(debug_dir, exist_ok=True)
 
-        # ROI retângulo na folha
         dbg = orig.copy()
         cv2.rectangle(dbg, (x1, y1), (x2, y2), (0, 255, 0), 4)
         cv2.imwrite(os.path.join(debug_dir, f"{turma}_{nome}_01_roi_rect.png"), dbg)
 
-        # ROI recortada
         cv2.imwrite(os.path.join(debug_dir, f"{turma}_{nome}_02_roi.png"), orig_roi)
 
-        # bolhas detectadas (círculos)
         img_bubbles = orig_roi.copy()
         for (cx, cy, r) in circles:
             cv2.circle(img_bubbles, (int(cx), int(cy)), int(round(r)), (0, 255, 0), 2)
         cv2.imwrite(os.path.join(debug_dir, f"{turma}_{nome}_03_bubbles.png"), img_bubbles)
 
-        # marcadas vs vazias
         img_mark = orig_roi.copy()
         thr_abs = max(float(thr), float(cfg.thr_abs_floor))
         for (cx, cy, r, fill) in bubble_info:
