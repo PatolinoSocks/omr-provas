@@ -84,13 +84,29 @@ n_questions = getattr(cfg, "n_questions_used", 22)
 st.sidebar.subheader("Gabarito (1–40)")
 gabarito_text = st.sidebar.text_area(
     "Cole o gabarito (40 letras ou linhas 1:A etc.)",
-    value="ABCDABCDABCDABCDABCDABCDABCDABCDABCDABCD",
+    value="",
     height=120,
 )
 gabarito = parse_gabarito_text(gabarito_text, n_questions=n_questions)
 
-if len(gabarito) != n_questions:
-    st.sidebar.warning(f"Gabarito incompleto: {len(gabarito)}/{n_questions}. A nota pode ficar errada.")
+if len(gabarito) > 0:
+    cfg.n_questions_used = len(gabarito)
+
+if len(gabarito) > 0:
+    st.sidebar.info(
+        f"""
+Formulário suporta até: **40 questões**
+
+Questões da prova: **{len(gabarito)}**
+"""
+    )
+
+if len(gabarito) == 0:
+    st.sidebar.warning("Cole o gabarito da prova.")
+else:
+    st.sidebar.success(f"Gabarito carregado: {len(gabarito)} questões.")
+
+cfg.n_questions_used = len(gabarito)
 
 debug = st.sidebar.checkbox("Mostrar detalhes por aluno (thr, erros/brancos)", value=False)
 
@@ -139,16 +155,21 @@ for i, up in enumerate(uploads, start=1):
     try:
         r = corrigir_prova(tmp_path, gabarito, cfg=cfg)
 
+        respostas_detectadas = sum(
+            1 for _, a in r.get("respostas", []) if a is not None
+        )
+
         r["turma"] = turma_sug
         r["nome"] = nome_sug
 
         row = {
             "turma": r.get("turma", ""),
-            "nome": r.get("nome", ""),
+             "nome": r.get("nome", ""),
             "imagem": up.name,
             "nota": r.get("nota", None),
             "percentual": r.get("percentual", None),
             "acertos": r.get("acertos", None),
+            "respondidas": respostas_detectadas,
             "erros": ",".join(map(str, r.get("erros", []))) if r.get("erros") else "",
         }
 
@@ -169,6 +190,15 @@ for i, up in enumerate(uploads, start=1):
 
 status.success("✅ Lote finalizado!")
 
+st.success(
+    f"""
+📊 Resumo da correção
+
+Formulário: **40 posições**
+
+Questões corrigidas: **{len(gabarito)}**
+"""
+)
 
 # ---------------------------
 # Tabelas de saída

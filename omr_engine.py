@@ -481,6 +481,9 @@ def corrigir_prova(
 
     # answers
     answers = extract_answers_kmeans(bubble_info, thr, cfg)
+    if gabarito:
+    max_q = max(gabarito.keys())
+    answers = [a for a in answers if a[0] <= max_q]
 
     # grade
     result_grade = grade_answers(answers, gabarito)
