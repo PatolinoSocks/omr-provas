@@ -258,15 +258,6 @@ if run:
     st.session_state.processado = True
     st.session_state.n_questions_used = n_questions_used
 
-st.success(
-    f"""
-📊 Resumo da correção
-
-Formulário: **{MAX_QUESTIONS} posições**
-
-Questões corrigidas: **{n_questions_used}**
-"""
-)
 
 def recalcular_resultado_linha(row, gabarito, n_questions):
     acertos = 0
