@@ -208,6 +208,36 @@ Questões corrigidas: **{n_questions_used}**
 """
 )
 
+def recalcular_resultado_linha(row, gabarito, n_questions):
+    acertos = 0
+    erros = []
+
+    for i in range(1, n_questions + 1):
+        q_col = f"Q{i:02d}"
+        resp = str(row.get(q_col, "")).strip().upper()
+        correta = gabarito.get(i)
+
+        # normaliza resposta manual
+        if resp not in {"A", "B", "C", "D"}:
+            resp = ""
+            row[q_col] = ""
+
+        if resp == "":
+            continue
+        elif correta is not None and resp == correta:
+            acertos += 1
+        else:
+            erros.append(i)
+
+    total = len(gabarito) if gabarito else n_questions
+    percentual = (acertos / total) * 100 if total > 0 else 0.0
+
+    row["acertos"] = acertos
+    row["nota"] = acertos
+    row["percentual"] = percentual
+    row["erros"] = ",".join(map(str, erros)) if erros else ""
+
+    return row
 
 # ---------------------------
 # Tabelas de saída
@@ -215,20 +245,50 @@ Questões corrigidas: **{n_questions_used}**
 st.subheader("3) Resultado consolidado")
 
 df = pd.DataFrame(resultados) if resultados else pd.DataFrame()
+
 if not df.empty:
     cols_first = ["turma", "nome", "imagem", "nota", "percentual", "acertos", "respondidas", "erros"]
     other_cols = [c for c in df.columns if c not in cols_first]
     df = df[cols_first + other_cols]
-    df = df.sort_values(["turma", "nome", "imagem"], na_position="last")
+    df = df.sort_values(["turma", "nome", "imagem"], na_position="last").reset_index(drop=True)
 
-    st.dataframe(df, use_container_width=True)
+    st.markdown("### ✏️ Ajuste manual das respostas")
+    st.caption("Edite apenas as colunas das questões. A nota será recalculada automaticamente.")
+
+    editable_cols = [f"Q{i:02d}" for i in range(1, n_questions_used + 1)]
+    non_editable_cols = [c for c in df.columns if c not in editable_cols]
+
+    edited_df = st.data_editor(
+        df,
+        use_container_width=True,
+        num_rows="fixed",
+        disabled=non_editable_cols,
+        column_config={
+            col: st.column_config.SelectboxColumn(
+                col,
+                options=["", "A", "B", "C", "D"],
+                required=False,
+            )
+            for col in editable_cols
+        },
+        key="editor_resultados",
+    )
+
+    # recalcular automaticamente após edição manual
+    df_final = edited_df.copy()
+    for idx in df_final.index:
+        df_final.loc[idx] = recalcular_resultado_linha(df_final.loc[idx], gabarito, n_questions_used)
+
+    st.markdown("### ✅ Resultado final recalculado")
+    st.dataframe(df_final, use_container_width=True)
+
 else:
     st.warning("Nenhum resultado gerado.")
+    df_final = df
 
 if erros:
     st.subheader("⚠️ Imagens com erro")
     st.dataframe(pd.DataFrame(erros), use_container_width=True)
-
 
 # ---------------------------
 # Downloads (CSV/Excel)
@@ -238,26 +298,26 @@ st.subheader("4) Baixar Excel/CSV consolidado")
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 base_name = f"resultados_lote_{timestamp}"
 
-csv_bytes = df.to_csv(index=False).encode("utf-8") if not df.empty else b""
+csv_bytes = df_final.to_csv(index=False).encode("utf-8") if not df_final.empty else b""
 st.download_button(
     "⬇️ Baixar CSV",
     data=csv_bytes,
     file_name=f"{base_name}.csv",
     mime="text/csv",
-    disabled=df.empty,
+    disabled=df_final.empty,
 )
 
 excel_buffer = io.BytesIO()
-if not df.empty:
+if not df_final.empty:
     with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="resultados")
+        df_final.to_excel(writer, index=False, sheet_name="resultados")
         if erros:
             pd.DataFrame(erros).to_excel(writer, index=False, sheet_name="erros")
 
 st.download_button(
     "⬇️ Baixar Excel (.xlsx)",
-    data=excel_buffer.getvalue() if not df.empty else b"",
+    data=excel_buffer.getvalue() if not df_final.empty else b"",
     file_name=f"{base_name}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    disabled=df.empty,
+    disabled=df_final.empty,
 )
