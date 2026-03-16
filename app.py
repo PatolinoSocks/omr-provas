@@ -9,6 +9,20 @@ import streamlit as st
 
 from omr_engine import corrigir_prova, OMRConfig
 
+# ---------------------------
+# Session state
+# ---------------------------
+if "processado" not in st.session_state:
+    st.session_state.processado = False
+
+if "df_resultados" not in st.session_state:
+    st.session_state.df_resultados = pd.DataFrame()
+
+if "df_erros" not in st.session_state:
+    st.session_state.df_erros = pd.DataFrame()
+
+if "n_questions_used" not in st.session_state:
+    st.session_state.n_questions_used = 0
 
 st.set_page_config(page_title="OMR - Correção em Lote", layout="centered")
 st.title("📄 OMR - Raphael Alvim Apps")
@@ -73,6 +87,35 @@ def answers_to_wide_row(answers, n_questions: int):
         for i in range(1, n_questions + 1)
     }
 
+def recalcular_resultado_linha(row, gabarito, n_questions):
+    acertos = 0
+    erros = []
+
+    for i in range(1, n_questions + 1):
+        q_col = f"Q{i:02d}"
+        resp = str(row.get(q_col, "")).strip().upper()
+        correta = gabarito.get(i)
+
+        if resp not in {"A", "B", "C", "D"}:
+            resp = ""
+            row[q_col] = ""
+
+        if resp == "":
+            continue
+        elif correta is not None and resp == correta:
+            acertos += 1
+        else:
+            erros.append(i)
+
+    total = len(gabarito) if gabarito else n_questions
+    percentual = (acertos / total) * 100 if total > 0 else 0.0
+
+    row["acertos"] = acertos
+    row["nota"] = acertos
+    row["percentual"] = percentual
+    row["erros"] = ",".join(map(str, erros)) if erros else ""
+
+    return row
 
 # ---------------------------
 # Sidebar
@@ -128,75 +171,92 @@ if not uploads:
     st.stop()
 
 st.subheader("2) Rodar correção em lote")
-run = st.button("✅ Corrigir todas", type="primary")
-if not run:
-    st.stop()
 
-if len(gabarito) == 0:
-    st.warning("Cole o gabarito antes de processar as imagens.")
-    st.stop()
+col_run, col_reset = st.columns([2, 1])
 
+with col_run:
+    run = st.button("✅ Corrigir todas", type="primary")
 
-# ---------------------------
-# Processamento em lote
-# ---------------------------
-resultados = []
-erros = []
+with col_reset:
+    reset = st.button("🔄 Limpar resultados")
 
-progress = st.progress(0)
-status = st.empty()
+if reset:
+    st.session_state.processado = False
+    st.session_state.df_resultados = pd.DataFrame()
+    st.session_state.df_erros = pd.DataFrame()
+    st.session_state.n_questions_used = 0
+    st.rerun()
 
-for i, up in enumerate(uploads, start=1):
-    status.write(f"Processando {i}/{len(uploads)}: **{up.name}**")
+if run:
+    if len(gabarito) == 0:
+        st.warning("Cole o gabarito antes de processar as imagens.")
+        st.stop()
 
-    suffix = os.path.splitext(up.name)[1].lower() or ".png"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(up.read())
-        tmp_path = tmp.name
+    resultados = []
+    erros = []
 
-    turma_sug, nome_sug = parse_turma_nome_from_filename(up.name)
+    progress = st.progress(0)
+    status = st.empty()
 
-    try:
-        r = corrigir_prova(tmp_path, gabarito, cfg=cfg)
+    for i, up in enumerate(uploads, start=1):
+        status.write(f"Processando {i}/{len(uploads)}: **{up.name}**")
 
-        respostas_detectadas = sum(
-            1 for _, a in r.get("respostas", []) if a is not None
-        )
+        suffix = os.path.splitext(up.name)[1].lower() or ".png"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(up.read())
+            tmp_path = tmp.name
 
-        r["turma"] = turma_sug
-        r["nome"] = nome_sug
+        turma_sug, nome_sug = parse_turma_nome_from_filename(up.name)
 
-        row = {
-            "turma": r.get("turma", ""),
-            "nome": r.get("nome", ""),
-            "imagem": up.name,
-            "nota": r.get("nota", None),
-            "percentual": r.get("percentual", None),
-            "acertos": r.get("acertos", None),
-            "respondidas": respostas_detectadas,
-            "erros": ",".join(map(str, r.get("erros", []))) if r.get("erros") else "",
-        }
-
-        row.update(answers_to_wide_row(r.get("respostas", []), n_questions_used))
-
-        if debug:
-            row["thr"] = r.get("thr", None)
-            row["brancos"] = ",".join(map(str, r.get("brancos", []))) if r.get("brancos") else ""
-
-        resultados.append(row)
-
-    except Exception as e:
-        erros.append({"imagem": up.name, "erro": str(e)})
-
-    finally:
         try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
+            r = corrigir_prova(tmp_path, gabarito, cfg=cfg)
 
-    progress.progress(int((i / len(uploads)) * 100))
+            respostas_detectadas = sum(
+                1 for _, a in r.get("respostas", []) if a is not None
+            )
 
-status.success("✅ Lote finalizado!")
+            r["turma"] = turma_sug
+            r["nome"] = nome_sug
+
+            row = {
+                "turma": r.get("turma", ""),
+                "nome": r.get("nome", ""),
+                "imagem": up.name,
+                "nota": r.get("nota", None),
+                "percentual": r.get("percentual", None),
+                "acertos": r.get("acertos", None),
+                "respondidas": respostas_detectadas,
+                "erros": ",".join(map(str, r.get("erros", []))) if r.get("erros") else "",
+            }
+
+            row.update(answers_to_wide_row(r.get("respostas", []), n_questions_used))
+
+            if debug:
+                row["thr"] = r.get("thr", None)
+                row["brancos"] = ",".join(map(str, r.get("brancos", []))) if r.get("brancos") else ""
+
+            resultados.append(row)
+
+        except Exception as e:
+            erros.append({"imagem": up.name, "erro": str(e)})
+
+        finally:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+        progress.progress(int((i / len(uploads)) * 100))
+
+    status.success("✅ Lote finalizado!")
+
+    df_results = pd.DataFrame(resultados) if resultados else pd.DataFrame()
+    df_errors = pd.DataFrame(erros) if erros else pd.DataFrame()
+
+    st.session_state.df_resultados = df_results
+    st.session_state.df_erros = df_errors
+    st.session_state.processado = True
+    st.session_state.n_questions_used = n_questions_used
 
 st.success(
     f"""
@@ -242,9 +302,25 @@ def recalcular_resultado_linha(row, gabarito, n_questions):
 # ---------------------------
 # Tabelas de saída
 # ---------------------------
-st.subheader("3) Resultado consolidado")
+if not st.session_state.processado:
+    st.info("Clique em 'Corrigir todas' para gerar os resultados.")
+    st.stop()
 
-df = pd.DataFrame(resultados) if resultados else pd.DataFrame()
+df = st.session_state.df_resultados.copy()
+df_erros = st.session_state.df_erros.copy()
+n_questions_used = st.session_state.n_questions_used
+
+st.success(
+    f"""
+📊 Resumo da correção
+
+Formulário: **{MAX_QUESTIONS} posições**
+
+Questões corrigidas: **{n_questions_used}**
+"""
+)
+
+st.subheader("3) Resultado consolidado")
 
 if not df.empty:
     cols_first = ["turma", "nome", "imagem", "nota", "percentual", "acertos", "respondidas", "erros"]
@@ -274,10 +350,11 @@ if not df.empty:
         key="editor_resultados",
     )
 
-    # recalcular automaticamente após edição manual
     df_final = edited_df.copy()
     for idx in df_final.index:
-        df_final.loc[idx] = recalcular_resultado_linha(df_final.loc[idx], gabarito, n_questions_used)
+        df_final.loc[idx] = recalcular_resultado_linha(
+            df_final.loc[idx], gabarito, n_questions_used
+        )
 
     st.markdown("### ✅ Resultado final recalculado")
     st.dataframe(df_final, use_container_width=True)
@@ -286,9 +363,9 @@ else:
     st.warning("Nenhum resultado gerado.")
     df_final = df
 
-if erros:
+if not df_erros.empty:
     st.subheader("⚠️ Imagens com erro")
-    st.dataframe(pd.DataFrame(erros), use_container_width=True)
+    st.dataframe(df_erros, use_container_width=True)
 
 # ---------------------------
 # Downloads (CSV/Excel)
@@ -311,8 +388,8 @@ excel_buffer = io.BytesIO()
 if not df_final.empty:
     with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
         df_final.to_excel(writer, index=False, sheet_name="resultados")
-        if erros:
-            pd.DataFrame(erros).to_excel(writer, index=False, sheet_name="erros")
+        if not df_erros.empty:
+            df_erros.to_excel(writer, index=False, sheet_name="erros")
 
 st.download_button(
     "⬇️ Baixar Excel (.xlsx)",
