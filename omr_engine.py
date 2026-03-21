@@ -354,21 +354,16 @@ def extract_answers_grid(
     alt_map = {0: "A", 1: "B", 2: "C", 3: "D"}
     thr_abs = max(float(thr), float(cfg.thr_abs_floor))
 
-    # todos os centros detectados
     xs = np.array([b[0] for b in bubble_info], dtype=float)
-    ys = np.array([b[1] for b in bubble_info], dtype=float)
 
     # 1) encontrar centros das 4 colunas
     k_cols = KMeans(n_clusters=cfg.n_cols, random_state=42, n_init=cfg.kmeans_n_init)
-    col_labels = k_cols.fit_predict(xs.reshape(-1, 1))
-
+    _ = k_cols.fit_predict(xs.reshape(-1, 1))
     col_centers = np.sort(k_cols.cluster_centers_.flatten())
 
-    # 2) para cada coluna, encontrar topo/base e centros globais A-D
     answers: List[Tuple[int, Answer]] = []
 
     for c in range(cfg.n_cols):
-        # bolhas mais próximas do centro da coluna atual
         col_center = col_centers[c]
         col_group = [b for b in bubble_info if abs(b[0] - col_center) < 80]
 
@@ -381,27 +376,31 @@ def extract_answers_grid(
         col_xs = np.array([b[0] for b in col_group], dtype=float)
         col_ys = np.array([b[1] for b in col_group], dtype=float)
 
-        # centros A-D globais da coluna
-        k_abcd = KMeans(n_clusters=cfg.n_alts, random_state=42, n_init=cfg.kmeans_n_init)
-        _ = k_abcd.fit_predict(col_xs.reshape(-1, 1))
-        alt_centers = np.sort(k_abcd.cluster_centers_.flatten())
+        # centros A-D globais da coluna (mais estável que KMeans em imagens inclinadas)
+        x_min = col_xs.min()
+        x_max = col_xs.max()
+
+        x_margin = (x_max - x_min) * 0.03
+        x_min -= x_margin
+        x_max += x_margin
+
+        alt_centers = np.linspace(x_min, x_max, cfg.n_alts)
 
         # topo/base com margem
         y_min = col_ys.min()
         y_max = col_ys.max()
-        margin = (y_max - y_min) * 0.04
-        y_min -= margin
-        y_max += margin
+        y_margin = (y_max - y_min) * 0.04
+        y_min -= y_margin
+        y_max += y_margin
 
         row_centers = np.linspace(y_min, y_max, cfg.n_rows_per_col)
+        row_step = row_centers[1] - row_centers[0]
 
-        # 3) para cada linha, montar slots A-D pela posição esperada
         for r in range(cfg.n_rows_per_col):
             q = c * cfg.n_rows_per_col + r + 1
             y_target = row_centers[r]
 
-            # pega bolhas próximas da linha
-            near_row = [b for b in col_group if abs(b[1] - y_target) < 0.45 * (row_centers[1] - row_centers[0])]
+            near_row = [b for b in col_group if abs(b[1] - y_target) < 0.45 * row_step]
 
             slots: List[Optional[Tuple[int, int, int, float]]] = [None] * cfg.n_alts
 
@@ -417,7 +416,6 @@ def extract_answers_grid(
                     if d_new < d_old:
                         slots[a_idx] = b
 
-            # se faltou slot, não decide
             if any(s is None for s in slots):
                 answers.append((q, None))
                 continue
