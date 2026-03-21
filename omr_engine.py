@@ -306,7 +306,10 @@ def extract_answers_kmeans(
     cfg: OMRConfig
 ) -> AnswersList:
     """
-    Extrai respostas por KMeans (colunas, linhas, A-D).
+    Extrai respostas por agrupamento:
+    - colunas por KMeans em X
+    - linhas por Y usando centros igualmente espaçados (mais robusto para formulário fixo)
+    - alternativas A-D por KMeans em X dentro de cada linha
     """
     if not bubble_info:
         return [(q, None) for q in range(1, cfg.n_questions_used + 1)]
@@ -321,7 +324,11 @@ def extract_answers_kmeans(
     if len(xs) < cfg.n_cols:
         return [(q, None) for q in range(1, cfg.n_questions_used + 1)]
 
-    k_cols = KMeans(n_clusters=cfg.n_cols, random_state=42, n_init=cfg.kmeans_n_init)
+    k_cols = KMeans(
+        n_clusters=cfg.n_cols,
+        random_state=42,
+        n_init=cfg.kmeans_n_init
+    )
     col_labels = k_cols.fit_predict(xs)
 
     col_centers = k_cols.cluster_centers_.flatten()
@@ -347,22 +354,32 @@ def extract_answers_kmeans(
                 answers.append((q, None))
             continue
 
-        # precisa ter >=7 pontos pra KMeans de 7 linhas
         if len(col_bubbles) < cfg.n_rows_per_col:
             for r in range(cfg.n_rows_per_col):
                 q = c * cfg.n_rows_per_col + r + 1
                 answers.append((q, None))
             continue
 
-        # ---- Linhas por Y
-        ys = np.array([b[1] for b in col_bubbles]).reshape(-1, 1)
-        k_rows = KMeans(n_clusters=cfg.n_rows_per_col, random_state=42, n_init=cfg.kmeans_n_init)
-        row_labels = k_rows.fit_predict(ys)
+        # ---- Linhas por Y (mais robusto que KMeans para formulário fixo)
+        ys = np.array([b[1] for b in col_bubbles], dtype=float)
+        ys_sorted = np.sort(ys)
 
-        row_centers = k_rows.cluster_centers_.flatten()
-        order_rows = np.argsort(row_centers)
-        remap_rows = {old: new for new, old in enumerate(order_rows)}
-        row_labels = np.array([remap_rows[int(l)] for l in row_labels])
+        # usa percentis para reduzir influência de pontos espúrios no topo/base
+        y_min = np.percentile(ys_sorted, 5)
+        y_max = np.percentile(ys_sorted, 95)
+
+        # fallback caso y_min e y_max fiquem muito próximos
+        if abs(y_max - y_min) < 1e-6:
+            y_min = ys.min()
+            y_max = ys.max()
+
+        row_centers = np.linspace(y_min, y_max, cfg.n_rows_per_col)
+
+        # cada bolha vai para a linha mais próxima
+        row_labels = np.argmin(
+            np.abs(ys[:, None] - row_centers[None, :]),
+            axis=1
+        )
 
         for r in range(cfg.n_rows_per_col):
             row_bubbles = [b for b, rl in zip(col_bubbles, row_labels) if int(rl) == r]
@@ -378,7 +395,11 @@ def extract_answers_kmeans(
                 answers.append((q, None))
                 continue
 
-            k_abcd = KMeans(n_clusters=cfg.n_alts, random_state=42, n_init=cfg.kmeans_n_init)
+            k_abcd = KMeans(
+                n_clusters=cfg.n_alts,
+                random_state=42,
+                n_init=cfg.kmeans_n_init
+            )
             lab_abcd = k_abcd.fit_predict(xs_row)
 
             cent = k_abcd.cluster_centers_.flatten()
@@ -393,6 +414,7 @@ def extract_answers_kmeans(
                 if not group:
                     slots.append(None)
                     continue
+
                 cx_target = float(cent[ord_abcd[a]])
                 best = min(group, key=lambda t: abs(t[0] - cx_target))
                 slots.append(best)
