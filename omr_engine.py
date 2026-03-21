@@ -300,16 +300,17 @@ def measure_fill_from_circles(
     return bubble_info, thr
 
 
-def extract_answers_kmeans(
+def extract_answers_grid(
     bubble_info: List[Tuple[int, int, int, float]],
     thr: float,
     cfg: OMRConfig
 ) -> AnswersList:
     """
-    Extrai respostas por agrupamento:
-    - colunas por KMeans em X
-    - linhas por Y usando centros igualmente espaçados (mais robusto para formulário fixo)
-    - alternativas A-D usando centros globais da coluna (mais estável que KMeans por linha)
+    Extrai respostas usando grade fixa do formulário:
+    - 4 colunas
+    - 10 linhas por coluna
+    - 4 alternativas A-D
+    Usa as posições detectadas para ajustar a grade e evitar deslocamentos.
     """
     if not bubble_info:
         return [(q, None) for q in range(1, cfg.n_questions_used + 1)]
@@ -317,107 +318,70 @@ def extract_answers_kmeans(
     alt_map = {0: "A", 1: "B", 2: "C", 3: "D"}
     thr_abs = max(float(thr), float(cfg.thr_abs_floor))
 
-    pts = np.array([(b[0], b[1]) for b in bubble_info], dtype=float)
+    # todos os centros detectados
+    xs = np.array([b[0] for b in bubble_info], dtype=float)
+    ys = np.array([b[1] for b in bubble_info], dtype=float)
 
-    # ---- Colunas por X
-    xs = pts[:, 0].reshape(-1, 1)
-    if len(xs) < cfg.n_cols:
-        return [(q, None) for q in range(1, cfg.n_questions_used + 1)]
+    # 1) encontrar centros das 4 colunas
+    k_cols = KMeans(n_clusters=cfg.n_cols, random_state=42, n_init=cfg.kmeans_n_init)
+    col_labels = k_cols.fit_predict(xs.reshape(-1, 1))
 
-    k_cols = KMeans(
-        n_clusters=cfg.n_cols,
-        random_state=42,
-        n_init=cfg.kmeans_n_init
-    )
-    col_labels = k_cols.fit_predict(xs)
+    col_centers = np.sort(k_cols.cluster_centers_.flatten())
 
-    col_centers = k_cols.cluster_centers_.flatten()
-    order_cols = np.argsort(col_centers)
-    remap_cols = {old: new for new, old in enumerate(order_cols)}
-    col_labels = np.array([remap_cols[int(l)] for l in col_labels])
-
-    cols: Dict[int, List[Tuple[int, int, int, float]]] = {i: [] for i in range(cfg.n_cols)}
-    for b, ci in zip(bubble_info, col_labels):
-        cols[int(ci)].append(b)
-
-    for c in range(cfg.n_cols):
-        cols[c] = sorted(cols[c], key=lambda t: t[1])
-
+    # 2) para cada coluna, encontrar topo/base e centros globais A-D
     answers: List[Tuple[int, Answer]] = []
 
     for c in range(cfg.n_cols):
-        col_bubbles = cols[c]
+        # bolhas mais próximas do centro da coluna atual
+        col_center = col_centers[c]
+        col_group = [b for b in bubble_info if abs(b[0] - col_center) < 80]
 
-        if not col_bubbles:
+        if len(col_group) < cfg.n_rows_per_col * 2:
             for r in range(cfg.n_rows_per_col):
                 q = c * cfg.n_rows_per_col + r + 1
                 answers.append((q, None))
             continue
 
-        if len(col_bubbles) < cfg.n_rows_per_col:
-            for r in range(cfg.n_rows_per_col):
-                q = c * cfg.n_rows_per_col + r + 1
-                answers.append((q, None))
-            continue
+        col_xs = np.array([b[0] for b in col_group], dtype=float)
+        col_ys = np.array([b[1] for b in col_group], dtype=float)
 
-        # ---- Centros globais A-D da coluna (mais estável que KMeans por linha)
-        xs_col = np.array([b[0] for b in col_bubbles]).reshape(-1, 1)
+        # centros A-D globais da coluna
+        k_abcd = KMeans(n_clusters=cfg.n_alts, random_state=42, n_init=cfg.kmeans_n_init)
+        _ = k_abcd.fit_predict(col_xs.reshape(-1, 1))
+        alt_centers = np.sort(k_abcd.cluster_centers_.flatten())
 
-        k_abcd_global = KMeans(
-            n_clusters=cfg.n_alts,
-            random_state=42,
-            n_init=cfg.kmeans_n_init
-        )
-        _ = k_abcd_global.fit_predict(xs_col)
-
-        alt_centers = k_abcd_global.cluster_centers_.flatten()
-        alt_centers = np.sort(alt_centers)
-
-        # ---- Linhas por Y (mais robusto que KMeans para formulário fixo)
-        ys = np.array([b[1] for b in col_bubbles], dtype=float)
-        ys_sorted = np.sort(ys)
-
-        y_min = ys.min()
-        y_max = ys.max()
-
-        # pequena margem para garantir inclusão da primeira e última linhas
-        margin = (y_max - y_min) * 0.05
+        # topo/base com margem
+        y_min = col_ys.min()
+        y_max = col_ys.max()
+        margin = (y_max - y_min) * 0.04
         y_min -= margin
         y_max += margin
 
-        if abs(y_max - y_min) < 1e-6:
-            y_min = ys.min()
-            y_max = ys.max()
-
         row_centers = np.linspace(y_min, y_max, cfg.n_rows_per_col)
 
-        # cada bolha vai para a linha mais próxima
-        row_labels = np.argmin(
-            np.abs(ys[:, None] - row_centers[None, :]),
-            axis=1
-        )
-
+        # 3) para cada linha, montar slots A-D pela posição esperada
         for r in range(cfg.n_rows_per_col):
-            row_bubbles = [b for b, rl in zip(col_bubbles, row_labels) if int(rl) == r]
             q = c * cfg.n_rows_per_col + r + 1
+            y_target = row_centers[r]
 
-            if len(row_bubbles) < cfg.n_alts:
-                answers.append((q, None))
-                continue
+            # pega bolhas próximas da linha
+            near_row = [b for b in col_group if abs(b[1] - y_target) < 0.45 * (row_centers[1] - row_centers[0])]
 
-            # ---- A-D por X usando centros globais da coluna
             slots: List[Optional[Tuple[int, int, int, float]]] = [None] * cfg.n_alts
 
-            for b in row_bubbles:
+            for b in near_row:
                 a_idx = int(np.argmin(np.abs(alt_centers - b[0])))
 
                 if slots[a_idx] is None:
                     slots[a_idx] = b
                 else:
                     old = slots[a_idx]
-                    if abs(b[0] - alt_centers[a_idx]) < abs(old[0] - alt_centers[a_idx]):
+                    d_new = abs(b[0] - alt_centers[a_idx]) + abs(b[1] - y_target)
+                    d_old = abs(old[0] - alt_centers[a_idx]) + abs(old[1] - y_target)
+                    if d_new < d_old:
                         slots[a_idx] = b
 
+            # se faltou slot, não decide
             if any(s is None for s in slots):
                 answers.append((q, None))
                 continue
@@ -427,23 +391,18 @@ def extract_answers_kmeans(
             best_val = fills[best_i]
             second_val = sorted(fills, reverse=True)[1]
 
-            # regra 1: passou no threshold normal
             if best_val >= thr_abs:
                 answers.append((q, alt_map[best_i]))
-
-            # regra 2: fallback para marcação mais fraca, mas claramente dominante
             elif best_val > 0.12 and (best_val - second_val) > 0.05:
                 answers.append((q, alt_map[best_i]))
-
             else:
                 answers.append((q, None))
 
     answers = sorted(answers, key=lambda x: x[0])
 
-    # --- correção automática de deslocamento (caso raro)
+    # fallback de deslocamento raro
     if answers and answers[0][1] is None:
         filled = [a for _, a in answers if a is not None]
-
         if len(filled) >= int(0.7 * len(answers)):
             shifted = []
             for i in range(len(answers)):
@@ -522,7 +481,7 @@ def corrigir_prova(
     bubble_info, thr = measure_fill_from_circles(circles, thresh_fill_roi, cfg)
 
     # answers
-    answers = extract_answers_kmeans(bubble_info, thr, cfg)
+    answers = extract_answers_grid(bubble_info, thr, cfg)
 
     if gabarito:
         max_q = max(gabarito.keys())
