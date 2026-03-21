@@ -365,8 +365,13 @@ def extract_answers_kmeans(
         ys_sorted = np.sort(ys)
 
         # usa percentis para reduzir influência de pontos espúrios no topo/base
-        y_min = np.percentile(ys_sorted, 5)
-        y_max = np.percentile(ys_sorted, 95)
+        y_min = ys.min()
+        y_max = ys.max()
+
+        # pequena margem para garantir inclusão da primeira linha
+        margin = (y_max - y_min) * 0.05
+        y_min -= margin
+        y_max += margin
 
         # fallback caso y_min e y_max fiquem muito próximos
         if abs(y_max - y_min) < 1e-6:
@@ -442,6 +447,21 @@ def extract_answers_kmeans(
                 answers.append((q, None))
 
     answers = sorted(answers, key=lambda x: x[0])
+
+    # --- correção automática de deslocamento (caso raro)
+    if answers and answers[0][1] is None:
+        filled = [a for _, a in answers if a is not None]
+
+        # se muitas respostas válidas depois → provável shift
+        if len(filled) >= int(0.7 * len(answers)):
+            shifted = []
+            for i in range(len(answers)):
+                if i + 1 < len(answers):
+                    shifted.append((answers[i][0], answers[i+1][1]))
+                else:
+                    shifted.append((answers[i][0], None))
+            answers = shifted
+
     return answers[: cfg.n_questions_used]
 
 
