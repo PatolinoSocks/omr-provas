@@ -148,13 +148,30 @@ def preprocess(image: np.ndarray, cfg: OMRConfig) -> Tuple[np.ndarray, np.ndarra
 
     return gray, thresh_raw, thresh_fill
 
+def order_marker_points(points: List[Tuple[float, float]]) -> np.ndarray:
+    """
+    Ordena 4 pontos como:
+    top-left, top-right, bottom-left, bottom-right
+    """
+    pts = np.array(points, dtype=np.float32)
+
+    s = pts.sum(axis=1)
+    diff = np.diff(pts, axis=1).reshape(-1)
+
+    tl = pts[np.argmin(s)]
+    br = pts[np.argmax(s)]
+    tr = pts[np.argmin(diff)]
+    bl = pts[np.argmax(diff)]
+
+    return np.array([tl, tr, bl, br], dtype=np.float32)
 
 def find_roi_by_markers(
     thresh_raw: np.ndarray, orig: np.ndarray, cfg: OMRConfig
 ) -> Tuple[np.ndarray, np.ndarray, Tuple[int, int, int, int]]:
     """
-    Acha 4 marcadores quadrados e recorta ROI.
-    Retorna: orig_roi, thresh_raw_roi, (x1,y1,x2,y2)
+    Acha 4 marcadores quadrados e retifica a área do gabarito por perspectiva.
+    Retorna:
+      orig_roi, thresh_raw_roi, bbox_dummy
     """
     cnts, _ = cv2.findContours(thresh_raw.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -185,27 +202,59 @@ def find_roi_by_markers(
 
     centers = []
     for area, x, y, w, h in cands_use:
-        cx = x + w / 2
-        cy = y + h / 2
+        cx = x + w / 2.0
+        cy = y + h / 2.0
         centers.append((cx, cy, x, y, w, h, area))
 
+    # escolhe 4 cantos
     tl = min(centers, key=lambda t: t[0] + t[1])
     tr = max(centers, key=lambda t: t[0] - t[1])
     bl = min(centers, key=lambda t: t[0] - t[1])
     br = max(centers, key=lambda t: t[0] + t[1])
 
-    xs = [tl[2], tr[2] + tr[4], bl[2], br[2] + br[4]]
-    ys = [tl[3], tr[3], bl[3] + bl[5], br[3] + br[5]]
+    marker_points = [
+        (tl[0], tl[1]),
+        (tr[0], tr[1]),
+        (bl[0], bl[1]),
+        (br[0], br[1]),
+    ]
+    src = order_marker_points(marker_points)
 
-    x1 = int(max(0, min(xs) - cfg.roi_pad))
-    x2 = int(min(W, max(xs) + cfg.roi_pad))
-    y1 = int(max(0, min(ys) - cfg.roi_pad))
-    y2 = int(min(H, max(ys) + cfg.roi_pad))
+    # tamanho canônico da ROI retificada
+    out_w = 1600
+    out_h = 900
 
-    orig_roi = orig[y1:y2, x1:x2]
-    thresh_raw_roi = thresh_raw[y1:y2, x1:x2]
+    # margem interna para não colar nos marcadores
+    pad_x = 120
+    pad_y = 90
 
-    return orig_roi, thresh_raw_roi, (x1, y1, x2, y2)
+    dst = np.array([
+        [pad_x, pad_y],                 # tl
+        [out_w - pad_x, pad_y],         # tr
+        [pad_x, out_h - pad_y],         # bl
+        [out_w - pad_x, out_h - pad_y], # br
+    ], dtype=np.float32)
+
+    M = cv2.getPerspectiveTransform(src, dst)
+
+    orig_roi = cv2.warpPerspective(
+        orig,
+        M,
+        (out_w, out_h),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE
+    )
+
+    thresh_raw_roi = cv2.warpPerspective(
+        thresh_raw,
+        M,
+        (out_w, out_h),
+        flags=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_REPLICATE
+    )
+
+    # bbox dummy, só para manter compatibilidade
+    return orig_roi, thresh_raw_roi, (0, 0, out_w, out_h)
 
 
 # ---------- DETECÇÃO (MUDANÇA PRINCIPAL) ----------
@@ -508,8 +557,14 @@ def corrigir_prova(
     orig = image.copy()
 
     # ROI
-    orig_roi, thresh_raw_roi, (x1, y1, x2, y2) = find_roi_by_markers(thresh_raw, orig, cfg)
-    thresh_fill_roi = thresh_fill[y1:y2, x1:x2]
+    orig_roi, thresh_raw_roi, _ = find_roi_by_markers(thresh_raw, orig, cfg)
+
+    # recria thresh_fill a partir da ROI já retificada
+    kc = cfg.close_ksize
+    if kc % 2 == 0:
+        kc += 1
+    k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kc, kc))
+    thresh_fill_roi = cv2.morphologyEx(thresh_raw_roi, cv2.MORPH_CLOSE, k_close)
 
     # bubbles (CANNY)
     circles = detect_bubbles_canny(orig_roi, cfg)
@@ -540,9 +595,7 @@ def corrigir_prova(
     if debug_dir:
         os.makedirs(debug_dir, exist_ok=True)
 
-        dbg = orig.copy()
-        cv2.rectangle(dbg, (x1, y1), (x2, y2), (0, 255, 0), 4)
-        cv2.imwrite(os.path.join(debug_dir, f"{turma}_{nome}_01_roi_rect.png"), dbg)
+        cv2.imwrite(os.path.join(debug_dir, f"{turma}_{nome}_01_roi.png"), orig_roi)
 
         cv2.imwrite(os.path.join(debug_dir, f"{turma}_{nome}_02_roi.png"), orig_roi)
 
