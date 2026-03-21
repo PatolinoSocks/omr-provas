@@ -309,7 +309,7 @@ def extract_answers_kmeans(
     Extrai respostas por agrupamento:
     - colunas por KMeans em X
     - linhas por Y usando centros igualmente espaçados (mais robusto para formulário fixo)
-    - alternativas A-D por KMeans em X dentro de cada linha
+    - alternativas A-D usando centros globais da coluna (mais estável que KMeans por linha)
     """
     if not bubble_info:
         return [(q, None) for q in range(1, cfg.n_questions_used + 1)]
@@ -360,20 +360,31 @@ def extract_answers_kmeans(
                 answers.append((q, None))
             continue
 
+        # ---- Centros globais A-D da coluna (mais estável que KMeans por linha)
+        xs_col = np.array([b[0] for b in col_bubbles]).reshape(-1, 1)
+
+        k_abcd_global = KMeans(
+            n_clusters=cfg.n_alts,
+            random_state=42,
+            n_init=cfg.kmeans_n_init
+        )
+        _ = k_abcd_global.fit_predict(xs_col)
+
+        alt_centers = k_abcd_global.cluster_centers_.flatten()
+        alt_centers = np.sort(alt_centers)
+
         # ---- Linhas por Y (mais robusto que KMeans para formulário fixo)
         ys = np.array([b[1] for b in col_bubbles], dtype=float)
         ys_sorted = np.sort(ys)
 
-        # usa percentis para reduzir influência de pontos espúrios no topo/base
         y_min = ys.min()
         y_max = ys.max()
 
-        # pequena margem para garantir inclusão da primeira linha
+        # pequena margem para garantir inclusão da primeira e última linhas
         margin = (y_max - y_min) * 0.05
         y_min -= margin
         y_max += margin
 
-        # fallback caso y_min e y_max fiquem muito próximos
         if abs(y_max - y_min) < 1e-6:
             y_min = ys.min()
             y_max = ys.max()
@@ -394,35 +405,18 @@ def extract_answers_kmeans(
                 answers.append((q, None))
                 continue
 
-            # ---- A-D por X (dentro da linha)
-            xs_row = np.array([b[0] for b in row_bubbles]).reshape(-1, 1)
-            if len(xs_row) < cfg.n_alts:
-                answers.append((q, None))
-                continue
+            # ---- A-D por X usando centros globais da coluna
+            slots: List[Optional[Tuple[int, int, int, float]]] = [None] * cfg.n_alts
 
-            k_abcd = KMeans(
-                n_clusters=cfg.n_alts,
-                random_state=42,
-                n_init=cfg.kmeans_n_init
-            )
-            lab_abcd = k_abcd.fit_predict(xs_row)
+            for b in row_bubbles:
+                a_idx = int(np.argmin(np.abs(alt_centers - b[0])))
 
-            cent = k_abcd.cluster_centers_.flatten()
-            ord_abcd = np.argsort(cent)
-            remap_abcd = {old: new for new, old in enumerate(ord_abcd)}
-            lab_abcd = np.array([remap_abcd[int(l)] for l in lab_abcd])
-
-            # escolher 1 bolha por alternativa (slot)
-            slots: List[Optional[Tuple[int, int, int, float]]] = []
-            for a in range(cfg.n_alts):
-                group = [b for b, la in zip(row_bubbles, lab_abcd) if int(la) == a]
-                if not group:
-                    slots.append(None)
-                    continue
-
-                cx_target = float(cent[ord_abcd[a]])
-                best = min(group, key=lambda t: abs(t[0] - cx_target))
-                slots.append(best)
+                if slots[a_idx] is None:
+                    slots[a_idx] = b
+                else:
+                    old = slots[a_idx]
+                    if abs(b[0] - alt_centers[a_idx]) < abs(old[0] - alt_centers[a_idx]):
+                        slots[a_idx] = b
 
             if any(s is None for s in slots):
                 answers.append((q, None))
@@ -430,7 +424,6 @@ def extract_answers_kmeans(
 
             fills = [float(s[3]) for s in slots]  # type: ignore[arg-type]
             best_i = int(np.argmax(fills))
-
             best_val = fills[best_i]
             second_val = sorted(fills, reverse=True)[1]
 
@@ -438,8 +431,7 @@ def extract_answers_kmeans(
             if best_val >= thr_abs:
                 answers.append((q, alt_map[best_i]))
 
-            # regra 2: fallback (muito importante!)
-            # se for claramente maior que as outras, aceita mesmo abaixo do threshold
+            # regra 2: fallback para marcação mais fraca, mas claramente dominante
             elif best_val > 0.12 and (best_val - second_val) > 0.05:
                 answers.append((q, alt_map[best_i]))
 
@@ -452,12 +444,11 @@ def extract_answers_kmeans(
     if answers and answers[0][1] is None:
         filled = [a for _, a in answers if a is not None]
 
-        # se muitas respostas válidas depois → provável shift
         if len(filled) >= int(0.7 * len(answers)):
             shifted = []
             for i in range(len(answers)):
                 if i + 1 < len(answers):
-                    shifted.append((answers[i][0], answers[i+1][1]))
+                    shifted.append((answers[i][0], answers[i + 1][1]))
                 else:
                     shifted.append((answers[i][0], None))
             answers = shifted
