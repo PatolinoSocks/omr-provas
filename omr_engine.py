@@ -82,6 +82,42 @@ def parse_turma_nome(image_path: str) -> Tuple[str, str]:
         return turma, nome
     return "SEM_TURMA", base
 
+def deskew_image(image: np.ndarray) -> np.ndarray:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    edges = cv2.Canny(gray, 50, 150)
+
+    lines = cv2.HoughLines(edges, 1, np.pi / 180, 150)
+
+    if lines is None:
+        return image
+
+    angles = []
+
+    for rho, theta in lines[:, 0]:
+        angle = (theta * 180 / np.pi) - 90
+        if -30 < angle < 30:
+            angles.append(angle)
+
+    if not angles:
+        return image
+
+    median_angle = np.median(angles)
+
+    (h, w) = image.shape[:2]
+    center = (w // 2, h // 2)
+
+    M = cv2.getRotationMatrix2D(center, median_angle, 1.0)
+
+    rotated = cv2.warpAffine(
+        image,
+        M,
+        (w, h),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE
+    )
+
+    return rotated
 
 def preprocess(image: np.ndarray, cfg: OMRConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -464,6 +500,9 @@ def corrigir_prova(
     image = cv2.imread(image_path)
     if image is None:
         raise FileNotFoundError(f"Não consegui ler a imagem: {image_path}")
+
+    if image is not None:
+        image = deskew_image(image)
 
     turma, nome = parse_turma_nome(image_path)
 
