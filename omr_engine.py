@@ -426,8 +426,18 @@ def extract_answers_kmeans(
             fills = [float(s[3]) for s in slots]  # type: ignore[arg-type]
             best_i = int(np.argmax(fills))
 
-            if fills[best_i] >= thr_abs:
+            best_val = fills[best_i]
+            second_val = sorted(fills, reverse=True)[1]
+
+            # regra 1: passou no threshold normal
+            if best_val >= thr_abs:
                 answers.append((q, alt_map[best_i]))
+
+            # regra 2: fallback (muito importante!)
+            # se for claramente maior que as outras, aceita mesmo abaixo do threshold
+            elif best_val > 0.12 and (best_val - second_val) > 0.05:
+                answers.append((q, alt_map[best_i]))
+
             else:
                 answers.append((q, None))
 
