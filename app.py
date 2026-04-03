@@ -140,7 +140,7 @@ if len(gabarito) == 0:
     st.sidebar.warning("Cole o gabarito da prova.")
     n_questions_corrigir = MAX_QUESTIONS
 else:
-    n_questions_corrigir = len(gabarito)
+    n_questions_corrigir = len(gabarito) if gabarito else MAX_QUESTIONS
     st.sidebar.success(f"Gabarito carregado: {n_questions_corrigir} questões.")
     st.sidebar.info(
         f"""
@@ -152,7 +152,7 @@ Questões da prova: **{n_questions_corrigir}**
 
 # engine sempre usa layout físico de 40
 cfg.n_rows_per_col = 10
-cfg.n_questions_used = n_questions_used
+cfg.n_questions_used = 40  # FIXO no engine
 
 valor_total_prova = st.sidebar.number_input(
     "Valor total da prova",
