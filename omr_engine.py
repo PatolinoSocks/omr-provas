@@ -47,6 +47,7 @@ class OMRConfig:
     canny_t2: int = 150
     edges_dilate_ksize: int = 3
     edges_dilate_iter: int = 1
+    roi_scale_factor: float = 1.0
 
     # filtros por círculo mínimo
     min_edge_contour_area: int = 25
@@ -173,12 +174,24 @@ def find_roi_by_markers(
 
 def detect_bubbles_canny(orig_roi: np.ndarray, cfg: OMRConfig) -> List[Tuple[int, int, float]]:
     """
-    Detecta bolhas por Canny na ROI e usa:
-      - minEnclosingCircle para (cx,cy,r)
-      - filtro por raio mais comum (histograma)
-    Retorna lista de círculos: [(cx,cy,r_float), ...]
+    Detecta bolhas por Canny na ROI.
+    Se roi_scale_factor > 1, amplia a ROI antes da detecção
+    e depois converte os círculos de volta para a escala original.
     """
-    gray_roi = cv2.cvtColor(orig_roi, cv2.COLOR_BGR2GRAY)
+    scale = max(float(cfg.roi_scale_factor), 1.0)
+
+    if scale > 1.0:
+        roi_proc = cv2.resize(
+            orig_roi,
+            None,
+            fx=scale,
+            fy=scale,
+            interpolation=cv2.INTER_CUBIC
+        )
+    else:
+        roi_proc = orig_roi.copy()
+
+    gray_roi = cv2.cvtColor(roi_proc, cv2.COLOR_BGR2GRAY)
 
     kb = cfg.canny_blur_ksize
     if kb % 2 == 0:
@@ -198,15 +211,20 @@ def detect_bubbles_canny(orig_roi: np.ndarray, cfg: OMRConfig) -> List[Tuple[int
     cands: List[Tuple[int, int, float]] = []
     r_list: List[float] = []
 
+    # ajusta limites ao trabalhar em escala ampliada
+    min_area = cfg.min_edge_contour_area * (scale ** 2)
+    min_r = cfg.min_r * scale
+    max_r = cfg.max_r * scale
+
     for c in contours:
         area = cv2.contourArea(c)
-        if area < cfg.min_edge_contour_area:
+        if area < min_area:
             continue
 
         (x0, y0), r = cv2.minEnclosingCircle(c)
         r = float(r)
 
-        if r < cfg.min_r or r > cfg.max_r:
+        if r < min_r or r > max_r:
             continue
 
         peri = cv2.arcLength(c, True)
@@ -217,8 +235,13 @@ def detect_bubbles_canny(orig_roi: np.ndarray, cfg: OMRConfig) -> List[Tuple[int
         if circ < cfg.circ_min_edge:
             continue
 
-        cands.append((int(x0), int(y0), r))
-        r_list.append(r)
+        # volta para escala original
+        cx = int(round(x0 / scale))
+        cy = int(round(y0 / scale))
+        rr = float(r / scale)
+
+        cands.append((cx, cy, rr))
+        r_list.append(rr)
 
     if not r_list:
         return []
@@ -232,7 +255,6 @@ def detect_bubbles_canny(orig_roi: np.ndarray, cfg: OMRConfig) -> List[Tuple[int
     circles = [(cx, cy, r) for (cx, cy, r) in cands if abs(r - r_mode) <= tol]
 
     return circles
-
 
 def otsu_1d_threshold(values: List[float], min_thr: float) -> float:
     if not values:

@@ -144,9 +144,10 @@ modelo_gabarito = st.sidebar.selectbox(
 cfg = OMRConfig()
 cfg.n_rows_per_col = 10
 cfg.n_questions_used = MAX_QUESTIONS  # engine sempre lê até 40 posições físicas
+cfg.roi_scale_factor = 1.0
 
 if modelo_gabarito == "Compacto":
-    # ajuste leve, sem exagerar na sensibilidade
+    # ajuste leve
     cfg.canny_blur_ksize = 5
     cfg.min_edge_contour_area = 18
     cfg.min_r = 6.0
@@ -155,16 +156,12 @@ if modelo_gabarito == "Compacto":
     cfg.r_tol_rel = 0.28
     cfg.fill_radius_factor = 0.74
 
+    # principal melhoria: ampliar ROI para detectar bolhas pequenas
+    cfg.roi_scale_factor = 2.0
+
     st.sidebar.info("Perfil ativo: Compacto")
 else:
     st.sidebar.info("Perfil ativo: Normal")
-
-st.sidebar.subheader("Gabarito (até 40 questões)")
-gabarito_text = st.sidebar.text_area(
-    "Cole o gabarito (até 40 letras ou linhas 1:A etc.)",
-    value="",
-    height=120,
-)
 
 gabarito = parse_gabarito_text(gabarito_text, n_questions=MAX_QUESTIONS)
 
