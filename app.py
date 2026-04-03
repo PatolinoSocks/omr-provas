@@ -132,9 +132,32 @@ def recalcular_resultado_linha(row, gabarito, n_questions, valor_total_prova):
 st.sidebar.header("⚙️ Configuração")
 
 # Engine sempre lê o formulário físico completo (40 posições)
+# ---------------------------
+# Modelo de gabarito
+# ---------------------------
+modelo_gabarito = st.sidebar.selectbox(
+    "Modelo de gabarito",
+    ["Normal", "Compacto"],
+    help="Use 'Compacto' para formulários menores, com bolhas mais próximas/menores."
+)
+
 cfg = OMRConfig()
 cfg.n_rows_per_col = 10
-cfg.n_questions_used = MAX_QUESTIONS
+cfg.n_questions_used = MAX_QUESTIONS  # engine sempre lê até 40 posições físicas
+
+if modelo_gabarito == "Compacto":
+    # ajuste leve, sem exagerar na sensibilidade
+    cfg.canny_blur_ksize = 5
+    cfg.min_edge_contour_area = 18
+    cfg.min_r = 6.0
+    cfg.max_r = 22.0
+    cfg.circ_min_edge = 0.09
+    cfg.r_tol_rel = 0.28
+    cfg.fill_radius_factor = 0.74
+
+    st.sidebar.info("Perfil ativo: Compacto")
+else:
+    st.sidebar.info("Perfil ativo: Normal")
 
 st.sidebar.subheader("Gabarito (até 40 questões)")
 gabarito_text = st.sidebar.text_area(
