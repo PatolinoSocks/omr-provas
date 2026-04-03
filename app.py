@@ -10,6 +10,12 @@ import streamlit as st
 from omr_engine import corrigir_prova, OMRConfig
 
 # ---------------------------
+# Constantes
+# ---------------------------
+ALT_OK = {"A", "B", "C", "D"}
+MAX_QUESTIONS = 40
+
+# ---------------------------
 # Session state
 # ---------------------------
 if "processado" not in st.session_state:
@@ -21,30 +27,27 @@ if "df_resultados" not in st.session_state:
 if "df_erros" not in st.session_state:
     st.session_state.df_erros = pd.DataFrame()
 
-if "n_questions_used" not in st.session_state:
-    st.session_state.n_questions_used = 0
+if "n_questions_corrigir" not in st.session_state:
+    st.session_state.n_questions_corrigir = 0
 
+# ---------------------------
+# Página
+# ---------------------------
 st.set_page_config(page_title="OMR - Correção em Lote", layout="centered")
 st.title("📄 OMR - Raphael Alvim Apps")
-st.title("Correção de Gabarito de Provas")
+st.subheader("Correção de Gabarito de Provas")
 st.caption("Envie várias fotos e baixe um Excel/CSV consolidado.")
 
-ALT_OK = {"A", "B", "C", "D"}
-MAX_QUESTIONS = 40
-cfg = OMRConfig()
-cfg.n_rows_per_col = 10
-cfg.n_questions_used = MAX_QUESTIONS   # sempre 40 no motor
-
-
+# ---------------------------
+# Funções auxiliares
+# ---------------------------
 def parse_turma_nome_from_filename(filename: str):
     base = os.path.splitext(os.path.basename(filename))[0].strip()
     base = base.replace(" ", "")
 
     if "_" in base:
         turma, nome = base.split("_", 1)
-        turma = turma.strip()
-        nome = nome.strip()
-        return turma, nome
+        return turma.strip(), nome.strip()
 
     return "SEM_TURMA", base
 
@@ -54,7 +57,7 @@ def parse_gabarito_text(text: str, n_questions: int = 40):
     if not text:
         return {}
 
-    # caso 1: "ABCD..." contínuo
+    # caso 1: sequência contínua "ABCDAB..."
     compact = re.sub(r"[^ABCD]", "", text)
     if len(compact) >= 1:
         compact = compact[:n_questions]
@@ -73,7 +76,7 @@ def parse_gabarito_text(text: str, n_questions: int = 40):
             if 1 <= q <= n_questions:
                 g[q] = a
 
-    # caso 3: tokens separados
+    # caso 3: tokens separados por espaço/vírgula
     if not g:
         tokens = re.split(r"[\s,;]+", text)
         tokens = [t for t in tokens if t]
@@ -90,7 +93,8 @@ def answers_to_wide_row(answers, n_questions: int):
         for i in range(1, n_questions + 1)
     }
 
-def recalcular_resultado_linha(row, gabarito, n_questions):
+
+def recalcular_resultado_linha(row, gabarito, n_questions, valor_total_prova):
     acertos = 0
     erros = []
 
@@ -99,7 +103,7 @@ def recalcular_resultado_linha(row, gabarito, n_questions):
         resp = str(row.get(q_col, "")).strip().upper()
         correta = gabarito.get(i)
 
-        if resp not in {"A", "B", "C", "D"}:
+        if resp not in ALT_OK:
             resp = ""
             row[q_col] = ""
 
@@ -112,20 +116,27 @@ def recalcular_resultado_linha(row, gabarito, n_questions):
 
     total = len(gabarito) if gabarito else n_questions
     percentual = (acertos / total) * 100 if total > 0 else 0.0
+    valor_por_questao = (valor_total_prova / total) if total > 0 else 0.0
+    nota_final = acertos * valor_por_questao
 
     row["acertos"] = acertos
-    row["nota"] = acertos
+    row["nota"] = acertos  # acertos brutos
+    row["nota_final"] = round(nota_final, 2)
     row["percentual"] = percentual
     row["erros"] = ",".join(map(str, erros)) if erros else ""
 
     return row
+
 
 # ---------------------------
 # Sidebar
 # ---------------------------
 st.sidebar.header("⚙️ Configuração")
 
+# Engine sempre lê o formulário físico completo (40 posições)
 cfg = OMRConfig()
+cfg.n_rows_per_col = 10
+cfg.n_questions_used = MAX_QUESTIONS
 
 st.sidebar.subheader("Gabarito (até 40 questões)")
 gabarito_text = st.sidebar.text_area(
@@ -137,10 +148,10 @@ gabarito_text = st.sidebar.text_area(
 gabarito = parse_gabarito_text(gabarito_text, n_questions=MAX_QUESTIONS)
 
 if len(gabarito) == 0:
-    st.sidebar.warning("Cole o gabarito da prova.")
     n_questions_corrigir = MAX_QUESTIONS
+    st.sidebar.warning("Cole o gabarito da prova.")
 else:
-    n_questions_corrigir = len(gabarito) if gabarito else MAX_QUESTIONS
+    n_questions_corrigir = len(gabarito)
     st.sidebar.success(f"Gabarito carregado: {n_questions_corrigir} questões.")
     st.sidebar.info(
         f"""
@@ -150,10 +161,6 @@ Questões da prova: **{n_questions_corrigir}**
 """
     )
 
-# engine sempre usa layout físico de 40
-cfg.n_rows_per_col = 10
-cfg.n_questions_used = 40  # FIXO no engine
-
 valor_total_prova = st.sidebar.number_input(
     "Valor total da prova",
     min_value=0.0,
@@ -161,16 +168,12 @@ valor_total_prova = st.sidebar.number_input(
     step=0.5
 )
 
-if len(gabarito) > 0:
-    valor_por_questao = valor_total_prova / len(gabarito)
-else:
-    valor_por_questao = 0.0
+valor_por_questao = (valor_total_prova / len(gabarito)) if len(gabarito) > 0 else 0.0
 
 debug = st.sidebar.checkbox("Mostrar detalhes por aluno (thr, erros/brancos)", value=False)
 
 st.sidebar.divider()
 st.sidebar.caption("Dica: nomeie arquivos como Turma_Nome.ext (ex.: 7Verde_Aline.png)")
-
 
 # ---------------------------
 # Upload múltiplo
@@ -185,6 +188,9 @@ uploads = st.file_uploader(
 if not uploads:
     st.stop()
 
+# ---------------------------
+# Processamento
+# ---------------------------
 st.subheader("2) Rodar correção em lote")
 
 col_run, col_reset = st.columns([2, 1])
@@ -199,7 +205,7 @@ if reset:
     st.session_state.processado = False
     st.session_state.df_resultados = pd.DataFrame()
     st.session_state.df_erros = pd.DataFrame()
-    st.session_state.n_questions_used = 0
+    st.session_state.n_questions_corrigir = 0
     st.rerun()
 
 if run:
@@ -226,24 +232,19 @@ if run:
         try:
             r = corrigir_prova(tmp_path, gabarito, cfg=cfg)
 
-            respostas_detectadas = sum(
-                1 for _, a in r.get("respostas", []) if a is not None
-            )
-
-            r["turma"] = turma_sug
-            r["nome"] = nome_sug
+            respostas_detectadas = sum(1 for _, a in r.get("respostas", []) if a is not None)
 
             row = {
-                "turma": r.get("turma", ""),
-                "nome": r.get("nome", ""),
+                "turma": turma_sug,
+                "nome": nome_sug,
                 "imagem": up.name,
-                "nota": r.get("nota", None),  # acertos brutos
+                "nota": r.get("acertos", 0),  # acertos brutos
                 "nota_final": round(r.get("acertos", 0) * valor_por_questao, 2),
                 "percentual": r.get("percentual", None),
                 "acertos": r.get("acertos", None),
                 "respondidas": respostas_detectadas,
                 "erros": ",".join(map(str, r.get("erros", []))) if r.get("erros") else "",
-}
+            }
 
             row.update(answers_to_wide_row(r.get("respostas", []), n_questions_corrigir))
 
@@ -266,47 +267,10 @@ if run:
 
     status.success("✅ Lote finalizado!")
 
-    df_results = pd.DataFrame(resultados) if resultados else pd.DataFrame()
-    df_errors = pd.DataFrame(erros) if erros else pd.DataFrame()
-
-    st.session_state.df_resultados = df_results
-    st.session_state.df_erros = df_errors
+    st.session_state.df_resultados = pd.DataFrame(resultados) if resultados else pd.DataFrame()
+    st.session_state.df_erros = pd.DataFrame(erros) if erros else pd.DataFrame()
     st.session_state.processado = True
-    st.session_state.n_questions_used = n_questions_used
-
-
-def recalcular_resultado_linha(row, gabarito, n_questions, valor_total_prova):
-    acertos = 0
-    erros = []
-
-    for i in range(1, n_questions + 1):
-        q_col = f"Q{i:02d}"
-        resp = str(row.get(q_col, "")).strip().upper()
-        correta = gabarito.get(i)
-
-        if resp not in {"A", "B", "C", "D"}:
-            resp = ""
-            row[q_col] = ""
-
-        if resp == "":
-            continue
-        elif correta is not None and resp == correta:
-            acertos += 1
-        else:
-            erros.append(i)
-
-    total = len(gabarito) if gabarito else n_questions
-    percentual = (acertos / total) * 100 if total > 0 else 0.0
-    valor_por_questao = (valor_total_prova / total) if total > 0 else 0.0
-    nota_final = acertos * valor_por_questao
-
-    row["acertos"] = acertos
-    row["nota"] = acertos                  # mantém acertos brutos
-    row["nota_final"] = round(nota_final, 2)
-    row["percentual"] = percentual
-    row["erros"] = ",".join(map(str, erros)) if erros else ""
-
-    return row
+    st.session_state.n_questions_corrigir = n_questions_corrigir
 
 # ---------------------------
 # Tabelas de saída
@@ -317,7 +281,7 @@ if not st.session_state.processado:
 
 df = st.session_state.df_resultados.copy()
 df_erros = st.session_state.df_erros.copy()
-n_questions_used = st.session_state.n_questions_used
+n_questions_corrigir = st.session_state.n_questions_corrigir
 
 st.success(
     f"""
@@ -325,14 +289,18 @@ st.success(
 
 Formulário: **{MAX_QUESTIONS} posições**
 
-Questões corrigidas: **{n_questions_used}**
+Questões corrigidas: **{n_questions_corrigir}**
 """
 )
 
 st.subheader("3) Resultado consolidado")
 
 if not df.empty:
-    cols_first = ["turma", "nome", "imagem", "nota", "nota_final", "percentual", "acertos", "respondidas", "erros"]
+    cols_first = [
+        "turma", "nome", "imagem",
+        "nota", "nota_final", "percentual",
+        "acertos", "respondidas", "erros"
+    ]
     other_cols = [c for c in df.columns if c not in cols_first]
     df = df[cols_first + other_cols]
     df = df.sort_values(["turma", "nome", "imagem"], na_position="last").reset_index(drop=True)
@@ -340,7 +308,7 @@ if not df.empty:
     st.markdown("### ✏️ Ajuste manual das respostas")
     st.caption("Edite apenas as colunas das questões. A nota será recalculada automaticamente.")
 
-    editable_cols = [f"Q{i:02d}" for i in range(1, n_questions_used + 1)]
+    editable_cols = [f"Q{i:02d}" for i in range(1, n_questions_corrigir + 1)]
     non_editable_cols = [c for c in df.columns if c not in editable_cols]
 
     edited_df = st.data_editor(
@@ -377,7 +345,7 @@ if not df_erros.empty:
     st.dataframe(df_erros, use_container_width=True)
 
 # ---------------------------
-# Downloads (CSV/Excel)
+# Downloads
 # ---------------------------
 st.subheader("4) Baixar Excel/CSV consolidado")
 
