@@ -120,11 +120,9 @@ def recalcular_resultado_linha(row, gabarito, n_questions, valor_total_prova):
     nota_final = acertos * valor_por_questao
 
     row["acertos"] = acertos
-    row["nota"] = acertos  # acertos brutos
-    row["nota_final"] = round(nota_final, 2)
+    row["nota"] = round(nota_final, 2)   # nota proporcional final
     row["percentual"] = percentual
     row["erros"] = ",".join(map(str, erros)) if erros else ""
-
     return row
 
 
@@ -134,34 +132,9 @@ def recalcular_resultado_linha(row, gabarito, n_questions, valor_total_prova):
 st.sidebar.header("⚙️ Configuração")
 
 # Engine sempre lê o formulário físico completo (40 posições)
-# ---------------------------
-# Configuração do modelo de gabarito
-# ---------------------------
-modelo_gabarito = st.sidebar.selectbox(
-    "Modelo de gabarito",
-    ["Normal", "Bolha pequena"],
-    help="Use 'Bolha pequena' para gabaritos mais compactos (simulados, provas menores)"
-)
-
 cfg = OMRConfig()
 cfg.n_rows_per_col = 10
-cfg.n_questions_used = MAX_QUESTIONS  # sempre 40 posições físicas
-
-# Ajuste automático conforme modelo
-if modelo_gabarito == "Bolha pequena":
-    cfg.canny_blur_ksize = 5
-    cfg.canny_t1 = 40
-    cfg.canny_t2 = 120
-    cfg.min_edge_contour_area = 12
-    cfg.min_r = 4.0
-    cfg.max_r = 20.0
-    cfg.circ_min_edge = 0.08
-    cfg.r_tol_rel = 0.30
-    cfg.fill_radius_factor = 0.78
-
-    st.sidebar.success("Modo bolha pequena ativado")
-else:
-    st.sidebar.info("Modo padrão (gabarito normal)")
+cfg.n_questions_used = MAX_QUESTIONS
 
 st.sidebar.subheader("Gabarito (até 40 questões)")
 gabarito_text = st.sidebar.text_area(
@@ -263,13 +236,12 @@ if run:
                 "turma": turma_sug,
                 "nome": nome_sug,
                 "imagem": up.name,
-                "nota": r.get("acertos", 0),  # acertos brutos
-                "nota_final": round(r.get("acertos", 0) * valor_por_questao, 2),
+                "nota": round(r.get("acertos", 0) * valor_por_questao, 2),  # nota proporcional
                 "percentual": r.get("percentual", None),
                 "acertos": r.get("acertos", None),
                 "respondidas": respostas_detectadas,
                 "erros": ",".join(map(str, r.get("erros", []))) if r.get("erros") else "",
-            }
+}
 
             row.update(answers_to_wide_row(r.get("respostas", []), n_questions_corrigir))
 
@@ -323,7 +295,7 @@ st.subheader("3) Resultado consolidado")
 if not df.empty:
     cols_first = [
         "turma", "nome", "imagem",
-        "nota", "nota_final", "percentual",
+        "nota", "percentual",
         "acertos", "respondidas", "erros"
     ]
     other_cols = [c for c in df.columns if c not in cols_first]
