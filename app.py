@@ -30,7 +30,10 @@ st.title("Correção de Gabarito de Provas")
 st.caption("Envie várias fotos e baixe um Excel/CSV consolidado.")
 
 ALT_OK = {"A", "B", "C", "D"}
-MAX_QUESTIONS = 40  # formulário físico suporta até 40
+MAX_QUESTIONS = 40
+cfg = OMRConfig()
+cfg.n_rows_per_col = 10
+cfg.n_questions_used = MAX_QUESTIONS   # sempre 40 no motor
 
 
 def parse_turma_nome_from_filename(filename: str):
@@ -135,21 +138,33 @@ gabarito = parse_gabarito_text(gabarito_text, n_questions=MAX_QUESTIONS)
 
 if len(gabarito) == 0:
     st.sidebar.warning("Cole o gabarito da prova.")
-    n_questions_used = MAX_QUESTIONS
+    n_questions_corrigir = MAX_QUESTIONS
 else:
-    n_questions_used = len(gabarito)
-    st.sidebar.success(f"Gabarito carregado: {n_questions_used} questões.")
+    n_questions_corrigir = len(gabarito)
+    st.sidebar.success(f"Gabarito carregado: {n_questions_corrigir} questões.")
     st.sidebar.info(
         f"""
 Formulário suporta até: **{MAX_QUESTIONS} questões**
 
-Questões da prova: **{n_questions_used}**
+Questões da prova: **{n_questions_corrigir}**
 """
     )
 
 # engine sempre usa layout físico de 40
 cfg.n_rows_per_col = 10
 cfg.n_questions_used = n_questions_used
+
+valor_total_prova = st.sidebar.number_input(
+    "Valor total da prova",
+    min_value=0.0,
+    value=10.0,
+    step=0.5
+)
+
+if len(gabarito) > 0:
+    valor_por_questao = valor_total_prova / len(gabarito)
+else:
+    valor_por_questao = 0.0
 
 debug = st.sidebar.checkbox("Mostrar detalhes por aluno (thr, erros/brancos)", value=False)
 
@@ -222,14 +237,15 @@ if run:
                 "turma": r.get("turma", ""),
                 "nome": r.get("nome", ""),
                 "imagem": up.name,
-                "nota": r.get("nota", None),
+                "nota": r.get("nota", None),  # acertos brutos
+                "nota_final": round(r.get("acertos", 0) * valor_por_questao, 2),
                 "percentual": r.get("percentual", None),
                 "acertos": r.get("acertos", None),
                 "respondidas": respostas_detectadas,
                 "erros": ",".join(map(str, r.get("erros", []))) if r.get("erros") else "",
-            }
+}
 
-            row.update(answers_to_wide_row(r.get("respostas", []), n_questions_used))
+            row.update(answers_to_wide_row(r.get("respostas", []), n_questions_corrigir))
 
             if debug:
                 row["thr"] = r.get("thr", None)
@@ -259,7 +275,7 @@ if run:
     st.session_state.n_questions_used = n_questions_used
 
 
-def recalcular_resultado_linha(row, gabarito, n_questions):
+def recalcular_resultado_linha(row, gabarito, n_questions, valor_total_prova):
     acertos = 0
     erros = []
 
@@ -268,7 +284,6 @@ def recalcular_resultado_linha(row, gabarito, n_questions):
         resp = str(row.get(q_col, "")).strip().upper()
         correta = gabarito.get(i)
 
-        # normaliza resposta manual
         if resp not in {"A", "B", "C", "D"}:
             resp = ""
             row[q_col] = ""
@@ -282,9 +297,12 @@ def recalcular_resultado_linha(row, gabarito, n_questions):
 
     total = len(gabarito) if gabarito else n_questions
     percentual = (acertos / total) * 100 if total > 0 else 0.0
+    valor_por_questao = (valor_total_prova / total) if total > 0 else 0.0
+    nota_final = acertos * valor_por_questao
 
     row["acertos"] = acertos
-    row["nota"] = acertos
+    row["nota"] = acertos                  # mantém acertos brutos
+    row["nota_final"] = round(nota_final, 2)
     row["percentual"] = percentual
     row["erros"] = ",".join(map(str, erros)) if erros else ""
 
@@ -314,7 +332,7 @@ Questões corrigidas: **{n_questions_used}**
 st.subheader("3) Resultado consolidado")
 
 if not df.empty:
-    cols_first = ["turma", "nome", "imagem", "nota", "percentual", "acertos", "respondidas", "erros"]
+    cols_first = ["turma", "nome", "imagem", "nota", "nota_final", "percentual", "acertos", "respondidas", "erros"]
     other_cols = [c for c in df.columns if c not in cols_first]
     df = df[cols_first + other_cols]
     df = df.sort_values(["turma", "nome", "imagem"], na_position="last").reset_index(drop=True)
@@ -344,7 +362,7 @@ if not df.empty:
     df_final = edited_df.copy()
     for idx in df_final.index:
         df_final.loc[idx] = recalcular_resultado_linha(
-            df_final.loc[idx], gabarito, n_questions_used
+            df_final.loc[idx], gabarito, n_questions_corrigir, valor_total_prova
         )
 
     st.markdown("### ✅ Resultado final recalculado")
