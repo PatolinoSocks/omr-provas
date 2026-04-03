@@ -134,9 +134,34 @@ def recalcular_resultado_linha(row, gabarito, n_questions, valor_total_prova):
 st.sidebar.header("⚙️ Configuração")
 
 # Engine sempre lê o formulário físico completo (40 posições)
+# ---------------------------
+# Configuração do modelo de gabarito
+# ---------------------------
+modelo_gabarito = st.sidebar.selectbox(
+    "Modelo de gabarito",
+    ["Normal", "Bolha pequena"],
+    help="Use 'Bolha pequena' para gabaritos mais compactos (simulados, provas menores)"
+)
+
 cfg = OMRConfig()
 cfg.n_rows_per_col = 10
-cfg.n_questions_used = MAX_QUESTIONS
+cfg.n_questions_used = MAX_QUESTIONS  # sempre 40 posições físicas
+
+# Ajuste automático conforme modelo
+if modelo_gabarito == "Bolha pequena":
+    cfg.canny_blur_ksize = 5
+    cfg.canny_t1 = 40
+    cfg.canny_t2 = 120
+    cfg.min_edge_contour_area = 12
+    cfg.min_r = 4.0
+    cfg.max_r = 20.0
+    cfg.circ_min_edge = 0.08
+    cfg.r_tol_rel = 0.30
+    cfg.fill_radius_factor = 0.78
+
+    st.sidebar.success("Modo bolha pequena ativado")
+else:
+    st.sidebar.info("Modo padrão (gabarito normal)")
 
 st.sidebar.subheader("Gabarito (até 40 questões)")
 gabarito_text = st.sidebar.text_area(
