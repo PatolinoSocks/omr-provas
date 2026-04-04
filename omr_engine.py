@@ -39,7 +39,7 @@ class OMRConfig:
     marker_ar_max: float = 1.20
     marker_min_side: int = 10
     roi_pad: int = 20
-    prefer_bottom_fraction_y: float = 0.35  # prioriza marcadores abaixo disso (folhas com capa)
+    prefer_bottom_fraction_y: float = 0.35
 
     # --- detecção de bolhas (CANNY na ROI) ---
     canny_blur_ksize: int = 7
@@ -73,6 +73,9 @@ class OMRConfig:
 
     # --- decisão ---
     thr_abs_floor: float = 0.18
+
+    # --- modelo ---
+    modelo: str = "normal"  # "normal" ou "compacto"
 
 
 def parse_turma_nome(image_path: str) -> Tuple[str, str]:
@@ -211,7 +214,6 @@ def detect_bubbles_canny(orig_roi: np.ndarray, cfg: OMRConfig) -> List[Tuple[int
     cands: List[Tuple[int, int, float]] = []
     r_list: List[float] = []
 
-    # ajusta limites ao trabalhar em escala ampliada
     min_area = cfg.min_edge_contour_area * (scale ** 2)
     min_r = cfg.min_r * scale
     max_r = cfg.max_r * scale
@@ -235,7 +237,6 @@ def detect_bubbles_canny(orig_roi: np.ndarray, cfg: OMRConfig) -> List[Tuple[int
         if circ < cfg.circ_min_edge:
             continue
 
-        # volta para escala original
         cx = int(round(x0 / scale))
         cy = int(round(y0 / scale))
         rr = float(r / scale)
@@ -255,6 +256,7 @@ def detect_bubbles_canny(orig_roi: np.ndarray, cfg: OMRConfig) -> List[Tuple[int
     circles = [(cx, cy, r) for (cx, cy, r) in cands if abs(r - r_mode) <= tol]
 
     return circles
+
 
 def otsu_1d_threshold(values: List[float], min_thr: float) -> float:
     if not values:
@@ -326,11 +328,10 @@ def extract_answers_grid(
     cfg: OMRConfig
 ) -> AnswersList:
     """
-    Extrai respostas usando grade fixa do formulário:
-    - 4 colunas
-    - 10 linhas por coluna
-    - 4 alternativas A-D
-    Usa as posições detectadas para ajustar a grade e evitar deslocamentos.
+    Modo normal:
+    - colunas por KMeans
+    - linhas por grade estimada dentro da coluna
+    - alternativas por centros X globais da coluna
     """
     if not bubble_info:
         return [(q, None) for q in range(1, cfg.n_questions_used + 1)]
@@ -340,7 +341,6 @@ def extract_answers_grid(
 
     xs = np.array([b[0] for b in bubble_info], dtype=float)
 
-    # 1) encontrar colunas usando labels do KMeans
     k_cols = KMeans(n_clusters=cfg.n_cols, random_state=42, n_init=cfg.kmeans_n_init)
     col_labels_raw = k_cols.fit_predict(xs.reshape(-1, 1))
     col_centers_raw = k_cols.cluster_centers_.flatten()
@@ -366,17 +366,13 @@ def extract_answers_grid(
         col_xs = np.array([b[0] for b in col_group], dtype=float)
         col_ys = np.array([b[1] for b in col_group], dtype=float)
 
-        # centros A-D globais da coluna
         x_min = col_xs.min()
         x_max = col_xs.max()
-
         x_margin = (x_max - x_min) * 0.03
         x_min -= x_margin
         x_max += x_margin
-
         alt_centers = np.linspace(x_min, x_max, cfg.n_alts)
 
-        # topo/base com margem
         y_min = col_ys.min()
         y_max = col_ys.max()
         y_margin = (y_max - y_min) * 0.04
@@ -424,7 +420,131 @@ def extract_answers_grid(
 
     answers = sorted(answers, key=lambda x: x[0])
 
-    # fallback de deslocamento raro
+    if answers and answers[0][1] is None:
+        filled = [a for _, a in answers if a is not None]
+        if len(filled) >= int(0.7 * len(answers)):
+            shifted = []
+            for i in range(len(answers)):
+                if i + 1 < len(answers):
+                    shifted.append((answers[i][0], answers[i + 1][1]))
+                else:
+                    shifted.append((answers[i][0], None))
+            answers = shifted
+
+    return answers[: cfg.n_questions_used]
+
+
+def extract_answers_template(
+    bubble_info: List[Tuple[int, int, int, float]],
+    thr: float,
+    cfg: OMRConfig
+) -> AnswersList:
+    """
+    Modo compacto:
+    - usa template geométrico mais rígido
+    - reduz dependência de clustering local
+    """
+    if not bubble_info:
+        return [(q, None) for q in range(1, cfg.n_questions_used + 1)]
+
+    alt_map = {0: "A", 1: "B", 2: "C", 3: "D"}
+    thr_abs = max(float(thr), float(cfg.thr_abs_floor))
+
+    xs = np.array([b[0] for b in bubble_info], dtype=float)
+    ys = np.array([b[1] for b in bubble_info], dtype=float)
+
+    # centros das colunas
+    k_cols = KMeans(n_clusters=cfg.n_cols, random_state=42, n_init=cfg.kmeans_n_init)
+    col_labels_raw = k_cols.fit_predict(xs.reshape(-1, 1))
+    col_centers_raw = k_cols.cluster_centers_.flatten()
+
+    order = np.argsort(col_centers_raw)
+    remap = {old: new for new, old in enumerate(order)}
+
+    col_groups: Dict[int, List[Tuple[int, int, int, float]]] = {i: [] for i in range(cfg.n_cols)}
+    for b, lab in zip(bubble_info, col_labels_raw):
+        col_groups[remap[int(lab)]].append(b)
+
+    # limites globais
+    x_min_all, x_max_all = xs.min(), xs.max()
+    y_min_all, y_max_all = ys.min(), ys.max()
+
+    x_margin_all = (x_max_all - x_min_all) * 0.04
+    y_margin_all = (y_max_all - y_min_all) * 0.04
+
+    x_min_all -= x_margin_all
+    x_max_all += x_margin_all
+    y_min_all -= y_margin_all
+    y_max_all += y_margin_all
+
+    answers: List[Tuple[int, Answer]] = []
+
+    for c in range(cfg.n_cols):
+        col_group = col_groups[c]
+
+        if len(col_group) < cfg.n_rows_per_col:
+            for r in range(cfg.n_rows_per_col):
+                q = c * cfg.n_rows_per_col + r + 1
+                answers.append((q, None))
+            continue
+
+        col_xs = np.array([b[0] for b in col_group], dtype=float)
+        col_ys = np.array([b[1] for b in col_group], dtype=float)
+
+        # template mais rígido em X dentro da coluna
+        x_min = col_xs.min()
+        x_max = col_xs.max()
+        x_margin = (x_max - x_min) * 0.05
+        x_min -= x_margin
+        x_max += x_margin
+        alt_centers = np.linspace(x_min, x_max, cfg.n_alts)
+
+        # linhas também mais rígidas
+        y_min = col_ys.min()
+        y_max = col_ys.max()
+        y_margin = (y_max - y_min) * 0.05
+        y_min -= y_margin
+        y_max += y_margin
+        row_centers = np.linspace(y_min, y_max, cfg.n_rows_per_col)
+        row_step = row_centers[1] - row_centers[0]
+
+        for r in range(cfg.n_rows_per_col):
+            q = c * cfg.n_rows_per_col + r + 1
+            y_target = row_centers[r]
+
+            near_row = [b for b in col_group if abs(b[1] - y_target) < 0.50 * row_step]
+            slots: List[Optional[Tuple[int, int, int, float]]] = [None] * cfg.n_alts
+
+            for b in near_row:
+                a_idx = int(np.argmin(np.abs(alt_centers - b[0])))
+
+                if slots[a_idx] is None:
+                    slots[a_idx] = b
+                else:
+                    old = slots[a_idx]
+                    d_new = abs(b[0] - alt_centers[a_idx]) + abs(b[1] - y_target)
+                    d_old = abs(old[0] - alt_centers[a_idx]) + abs(old[1] - y_target)
+                    if d_new < d_old:
+                        slots[a_idx] = b
+
+            if any(s is None for s in slots):
+                answers.append((q, None))
+                continue
+
+            fills = [float(s[3]) for s in slots]  # type: ignore[arg-type]
+            best_i = int(np.argmax(fills))
+            best_val = fills[best_i]
+            second_val = sorted(fills, reverse=True)[1]
+
+            if best_val >= thr_abs:
+                answers.append((q, alt_map[best_i]))
+            elif best_val > 0.12 and (best_val - second_val) > 0.05:
+                answers.append((q, alt_map[best_i]))
+            else:
+                answers.append((q, None))
+
+    answers = sorted(answers, key=lambda x: x[0])
+
     if answers and answers[0][1] is None:
         filled = [a for _, a in answers if a is not None]
         if len(filled) >= int(0.7 * len(answers)):
@@ -507,18 +627,20 @@ def corrigir_prova(
     bubble_info, thr = measure_fill_from_circles(circles, thresh_fill_roi, cfg)
     n_bubbles = len(bubble_info)
 
-    # se detectou bolhas demais de menos, assume falha de leitura
-    min_expected = cfg.n_cols * cfg.n_rows_per_col * 2  # margem conservadora
+    # leitura insuficiente -> retorna tudo em branco
+    min_expected = cfg.n_cols * cfg.n_rows_per_col * 2
     if len(bubble_info) < min_expected:
         answers = [(q, None) for q in range(1, cfg.n_questions_used + 1)]
     else:
-        answers = extract_answers_grid(bubble_info, thr, cfg)
+        if cfg.modelo.lower() == "compacto":
+            answers = extract_answers_template(bubble_info, thr, cfg)
+        else:
+            answers = extract_answers_grid(bubble_info, thr, cfg)
 
     if gabarito:
         max_q = max(gabarito.keys())
         answers = [a for a in answers if a[0] <= max_q]
 
-    # grade
     result_grade = grade_answers(answers, gabarito)
 
     out = {

@@ -147,6 +147,7 @@ cfg.n_questions_used = MAX_QUESTIONS  # engine sempre lê até 40 posições fí
 cfg.roi_scale_factor = 1.0
 
 if modelo_gabarito == "Compacto":
+    cfg.modelo = "compacto"
     cfg.canny_blur_ksize = 5
     cfg.min_edge_contour_area = 18
     cfg.min_r = 6.0
@@ -157,6 +158,7 @@ if modelo_gabarito == "Compacto":
     cfg.roi_scale_factor = 2.0
     st.sidebar.info("Perfil ativo: Compacto")
 else:
+    cfg.modelo = "normal"
     st.sidebar.info("Perfil ativo: Normal")
 
 # ---------------------------
