@@ -348,8 +348,20 @@ def extract_answers_grid(
     answers: List[Tuple[int, Answer]] = []
 
     for c in range(cfg.n_cols):
-        col_center = col_centers[c]
-        col_group = [b for b in bubble_info if abs(b[0] - col_center) < 80]
+    col_center = col_centers[c]
+
+    # limites da coluna com base nos centros vizinhos
+    if c == 0:
+        left_bound = -np.inf
+    else:
+        left_bound = (col_centers[c - 1] + col_centers[c]) / 2.0
+
+    if c == cfg.n_cols - 1:
+        right_bound = np.inf
+    else:
+        right_bound = (col_centers[c] + col_centers[c + 1]) / 2.0
+
+    col_group = [b for b in bubble_info if left_bound <= b[0] < right_bound]
 
         if len(col_group) < cfg.n_rows_per_col * 2:
             for r in range(cfg.n_rows_per_col):
