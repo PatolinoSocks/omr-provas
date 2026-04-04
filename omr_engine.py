@@ -340,28 +340,22 @@ def extract_answers_grid(
 
     xs = np.array([b[0] for b in bubble_info], dtype=float)
 
-    # 1) encontrar centros das 4 colunas
+    # 1) encontrar colunas usando labels do KMeans
     k_cols = KMeans(n_clusters=cfg.n_cols, random_state=42, n_init=cfg.kmeans_n_init)
-    _ = k_cols.fit_predict(xs.reshape(-1, 1))
-    col_centers = np.sort(k_cols.cluster_centers_.flatten())
+    col_labels_raw = k_cols.fit_predict(xs.reshape(-1, 1))
+    col_centers_raw = k_cols.cluster_centers_.flatten()
+
+    order = np.argsort(col_centers_raw)
+    remap = {old: new for new, old in enumerate(order)}
+
+    col_groups: Dict[int, List[Tuple[int, int, int, float]]] = {i: [] for i in range(cfg.n_cols)}
+    for b, lab in zip(bubble_info, col_labels_raw):
+        col_groups[remap[int(lab)]].append(b)
 
     answers: List[Tuple[int, Answer]] = []
 
     for c in range(cfg.n_cols):
-    col_center = col_centers[c]
-
-    # limites da coluna com base nos centros vizinhos
-    if c == 0:
-        left_bound = -np.inf
-    else:
-        left_bound = (col_centers[c - 1] + col_centers[c]) / 2.0
-
-    if c == cfg.n_cols - 1:
-        right_bound = np.inf
-    else:
-        right_bound = (col_centers[c] + col_centers[c + 1]) / 2.0
-
-    col_group = [b for b in bubble_info if left_bound <= b[0] < right_bound]
+        col_group = col_groups[c]
 
         if len(col_group) < cfg.n_rows_per_col * 2:
             for r in range(cfg.n_rows_per_col):
@@ -507,12 +501,18 @@ def corrigir_prova(
 
     # bubbles (CANNY)
     circles = detect_bubbles_canny(orig_roi, cfg)
+    n_circles = len(circles)
 
     # fill
     bubble_info, thr = measure_fill_from_circles(circles, thresh_fill_roi, cfg)
+    n_bubbles = len(bubble_info)
 
-    # answers
-    answers = extract_answers_grid(bubble_info, thr, cfg)
+    # se detectou bolhas demais de menos, assume falha de leitura
+    min_expected = cfg.n_cols * cfg.n_rows_per_col * 2  # margem conservadora
+    if len(bubble_info) < min_expected:
+        answers = [(q, None) for q in range(1, cfg.n_questions_used + 1)]
+    else:
+        answers = extract_answers_grid(bubble_info, thr, cfg)
 
     if gabarito:
         max_q = max(gabarito.keys())
@@ -527,6 +527,8 @@ def corrigir_prova(
         "imagem": os.path.basename(image_path),
         "thr": float(thr),
         "respostas": answers,
+        "n_circles": n_circles,
+        "n_bubbles": n_bubbles,
         **result_grade,
     }
 
